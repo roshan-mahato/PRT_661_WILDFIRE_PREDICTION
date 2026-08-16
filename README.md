@@ -64,13 +64,13 @@ This project addresses **Theme 2: Predictive Analytics and Forecasting**, coveri
 
 ## Team Members
 
-| Name | Student ID |
+Member ID| Name | Student ID |
 |---|---|
-| Roshan Mahato | S390410 |
-| Sansuwa Shrestha | S395173 |
-| Anish Machamasi | S389151 |
-| Salin Panta | S395229 |
-| Minh Nguyet Tran | S394122 |
+Member 1| Roshan Mahato | S390410 |
+Member 2| Sansuwa Shrestha | S395173 |
+Member 3| Anish Machamasi | S389151 |
+Member 4| Salin Panta | S395229 |
+Member 5| Minh Nguyet Tran | S394122 |
 
 **Submitted to:** Reem Sherif — PRT661, Charles Darwin University, Sydney Campus
 
