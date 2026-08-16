@@ -96,7 +96,7 @@ Member ID| Name | Student ID |
 
 ## Ethics & Privacy
 
-- **Zero PII collection** — only spatial coordinates and meteorological data are processed.
+- **Zero PII collection** — only spatial coordinates and meteorological data are processed; users' data is not included.
 - **Open data compliance** with NASA FIRMS and Open-Meteo licensing terms.
 - **Secret management** via `.streamlit/secrets.toml`, excluded from version control.
 
