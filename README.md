@@ -1,9 +1,29 @@
 # PRT_661_WILDFIRE_PREDICTION
 
+## Table of Contents
+
+- [Project Details](#project-details)
+- [Project Instruction](#project-instruction)
+
+<details open>
+<summary><strong>Project Details</strong></summary>
+
+### Contents
+
+- [Real-Time Wildfire Risk Tracking and Prediction System for Australia](#real-time-wildfire-risk-tracking-and-prediction-system-for-australia)
+- [Project Overview](#project-overview)
+- [Theme Alignment](#theme-alignment)
+- [Tech Stack](#tech-stack)
+- [Repository Structure](#repository-structure)
+- [Team Members](#team-members)
+- [Project Management](#project-management)
+- [Timeline](#timeline)
+- [Ethics &amp; Privacy](#ethics--privacy)
+- [References](#references)
+
 ## Real-Time Wildfire Risk Tracking and Prediction System for Australia
 
 A real-time, web-based system that tracks wildfire risk and predicts fire danger up to 7 days (168 hours) ahead across Australia. The system combines satellite hotspot data, weather forecasts, and a hybrid physics + machine learning engine to support emergency services, land managers, researchers, and local communities.
-
 
 ---
 
@@ -12,6 +32,7 @@ A real-time, web-based system that tracks wildfire risk and predicts fire danger
 The system ingests real-time satellite fire data and numerical weather forecasts, processes them through a validated ETL pipeline, and applies both the **McArthur Forest Fire Danger Index (FFDI)** and a supervised ML classifier (XGBoost / Random Forest) to estimate fire danger ratings and rapid-spread probabilities at a local, sub-regional scale.
 
 ### Core Objectives
+
 - **Asynchronous Data Ingestion** — Low-latency REST connections to NASA FIRMS (satellite hotspots), Open-Meteo (7-day weather forecasts), and air quality data.
 - **Feature Engineering & ETL** — Spatial filtering (Haversine radial buffer), AEST timestamp conversion, and fuel moisture index generation.
 - **Hybrid Analytics Engine** — McArthur FFDI physics baseline combined with a tree-based ML classifier for rapid fire-spread probability.
@@ -24,28 +45,28 @@ The system ingests real-time satellite fire data and numerical weather forecasts
 
 This project addresses **Theme 2: Predictive Analytics and Forecasting**, covering the full data science pipeline:
 
-| Pillar | Implementation |
-|---|---|
-| Data Acquisition | NASA FIRMS, Open-Meteo APIs |
-| Data Storage | SQLite (`wildfire_demo.db`) |
-| Data Processing | Pandas, NumPy |
+| Pillar                | Implementation                        |
+| --------------------- | ------------------------------------- |
+| Data Acquisition      | NASA FIRMS, Open-Meteo APIs           |
+| Data Storage          | SQLite (`wildfire_db.db`)           |
+| Data Processing       | Pandas, NumPy                         |
 | Analytics & Modelling | McArthur FFDI + XGBoost/Random Forest |
-| Visualization | Streamlit, Folium, Plotly |
+| Visualization         | Streamlit, Folium, Plotly             |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Data Acquisition | Python, async REST, Open-Meteo, NASA FIRMS |
-| Data Processing | Pandas, NumPy |
-| Fire Analytics | McArthur FFDI (Python implementation) |
-| Storage | SQLite (`wildfire_demo.db`) |
-| GIS | Folium |
-| Dashboard | Streamlit |
-| Charts | Plotly |
-| Project Management | GitHub + Jira |
+| Layer              | Technology                                 |
+| ------------------ | ------------------------------------------ |
+| Data Acquisition   | Python, async REST, Open-Meteo, NASA FIRMS |
+| Data Processing    | Pandas, NumPy                              |
+| Fire Analytics     | McArthur FFDI (Python implementation)      |
+| Storage            | SQLite (`wildfire_demo.db`)              |
+| GIS                | Folium                                     |
+| Dashboard          | Streamlit                                  |
+| Charts             | Plotly                                     |
+| Project Management | GitHub + Jira                              |
 
 ---
 
@@ -54,23 +75,23 @@ This project addresses **Theme 2: Predictive Analytics and Forecasting**, coveri
 ```
 ├── docs/         # Reports and design documents
 ├── diagrams/     # Draw.io architecture and workflow exports
-├── src/          # Application source code
+├── backend/      # For backend Structure
 ├── data/         # Data instructions and small permitted samples
 ├── tests/        # Validation and test scripts
-└── streamlit/    # Local configuration (no secrets committed)
+└── frontend/     # For frontent UI
 ```
 
 ---
 
 ## Team Members
 
-Member ID| Name | Student ID |
-|--------|------|------------|
-|Member 1| Roshan Mahato | S390410 |
-|Member 2| Sansuwa Shrestha | S395173 |
-|Member 3| Anish Machamasi | S389151 |
-|Member 4| Salin Panta | S395229 |
-|Member 5| Minh Nguyet Tran | S394122 |
+| Member ID | Name             | Student ID |
+| --------- | ---------------- | ---------- |
+| Member 1  | Roshan Mahato    | S390410    |
+| Member 2  | Sansuwa Shrestha | S395173    |
+| Member 3  | Anish Machamasi  | S389151    |
+| Member 4  | Salin Panta      | S395229    |
+| Member 5  | Minh Nguyet Tran | S394122    |
 
 **Submitted to:** Reem Sherif — PRT661, Charles Darwin University, Sydney Campus
 
@@ -80,17 +101,16 @@ Member ID| Name | Student ID |
 
 - **Jira Board:** [Team Data Science Practice – Jira board](https://anishmachamasi2262.atlassian.net/jira/software/projects/KAN/boards/2?filter=&groupBy=none&atlOrigin=eyJpIjoiYzk2Y2U2MmI1ZmY2NDFmYWEyZjJiYTNlOGE3MTJhMDMiLCJwIjoiaiJ9)
 
-
 ---
 
 ## Timeline
 
-| Week | Activities |
-|---|---|
+| Week   | Activities                                                      |
+| ------ | --------------------------------------------------------------- |
 | Week 1 | Project setup, architecture, API exploration, Jira/GitHub setup |
 | Week 2 | API integration, validation, SQLite schema, FFDI implementation |
-| Week 3 | Streamlit dashboard, Folium GIS, Plotly forecast charts |
-| Week 4 | Testing, risk review, documentation, report and demo prep |
+| Week 3 | Streamlit dashboard, Folium GIS, Plotly forecast charts         |
+| Week 4 | Testing, risk review, documentation, report and demo prep       |
 
 ---
 
@@ -105,3 +125,47 @@ Member ID| Name | Student ID |
 ## References
 
 Key references and full citation list are available in the project proposal report (`docs/`).
+
+</details>
+
+<details>
+<summary><strong>Project Instruction</strong></summary>
+
+### Contents
+
+- [Project Setup Instructions](#project-setup-instructions)
+- [Suggested Development Flow](#suggested-development-flow)
+- [Notes](#notes)
+
+## Project Setup Instructions
+
+### 1. Clone or open the project
+
+Open the repository in VS Code or your terminal.
+
+### 2. Create and activate a Python environment
+
+Use your preferred environment manager, for example `uv`:
+
+```bash
+uv sync
+```
+
+If you are using a virtual environment, activate it first.
+
+### 3. Install dependencies
+
+Install the required packages from the project configuration.
+
+---
+
+## Suggested Development Flow
+
+1. Set up Python environment
+2. Install dependencies
+3. Initialize database
+4. Load NASA FIRMS and weather data
+5. Run feature engineering pipeline
+6. Start dashboard and validate outputs
+
+</details>
