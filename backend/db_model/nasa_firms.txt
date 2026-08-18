@@ -1,0 +1,16 @@
+ #   Column      Non-Null Count  Dtype  
+---  ------      --------------  -----  
+ 0   latitude    74605 non-null  float64
+ 1   longitude   74605 non-null  float64
+ 2   bright_ti4  74605 non-null  float64
+ 3   scan        74605 non-null  float64
+ 4   track       74605 non-null  float64
+ 5   acq_date    74605 non-null  str    
+ 6   acq_time    74605 non-null  int64  
+ 7   satellite   74605 non-null  str    
+ 8   instrument  74605 non-null  str    
+ 9   confidence  74605 non-null  str    
+ 10  version     74605 non-null  str    
+ 11  bright_ti5  74605 non-null  float64
+ 12  frp         74605 non-null  float64
+ 13  daynight    74605 non-null  str  

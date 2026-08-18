@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Chat Session Logs
+#   Verbose logs of AI chat sessions including prompts, responses, and reasoning
+#   These are development artifacts and should not be committed to version control
+chat_session/
