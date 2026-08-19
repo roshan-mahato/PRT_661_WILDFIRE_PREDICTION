@@ -221,3 +221,16 @@ __marimo__/
 #   Verbose logs of AI chat sessions including prompts, responses, and reasoning
 #   These are development artifacts and should not be committed to version control
 chat_session/
+
+# Large data files - too big for GitHub
+data/
+*.csv
+*.zip
+raw_nasa_firms/
+raw_nasa_firms_processed/
+chat_session/raw_firms_data/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
