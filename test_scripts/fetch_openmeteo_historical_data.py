@@ -1,3 +1,4 @@
+
 import os
 import time
 from datetime import timedelta
@@ -8,14 +9,14 @@ import requests_cache
 from retry_requests import retry
  
 # ---------- CONFIG ----------
-FIRMS_CSV_PATH = "data/fire_archive_SV-C2_792465.csv"     # <-- change to your file
+FIRMS_CSV_PATH = "data/fire_archive_SV-C2_792465.csv"
 OUTPUT_CSV_PATH = "data/weather_data.csv"
 PROGRESS_LOG_PATH = "data/fetch_progress.log"
  
 GRID_SIZE_DEGREES = 0.5   # ~55km cells — better spatial precision, ~4 days to complete with the daily budget below
 CHUNK_DAYS = 14
 REQUEST_DELAY_SECONDS = 1
-DAILY_CALL_LIMIT = 9000   # safety margin under the 10,000/day free limit
+DAILY_CALL_LIMIT = 9900   # pushed close to the 10,000/day free limit, small safety buffer only
  
 HOURLY_VARS = [
     "temperature_2m",
@@ -23,7 +24,12 @@ HOURLY_VARS = [
     "wind_speed_10m",
     "wind_direction_10m",
     "precipitation",
-]
+    "wind_gusts_10m",              # gusts matter more than average wind for fire spread
+    "soil_moisture_0_to_7cm",      # feeds into Drought Factor estimation
+    "cape",                        # convective available potential energy — dry lightning/ignition risk
+    "vapour_pressure_deficit",     # air dryness, closely tied to fire risk
+    "et0_fao_evapotranspiration",  # rate of fuel drying
+]  # exactly 10 — the threshold before extra fields start costing more than 1 call each
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
  
 cache_session = requests_cache.CachedSession(".cache", expire_after=86400)
