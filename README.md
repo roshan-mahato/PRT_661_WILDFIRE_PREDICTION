@@ -157,6 +157,35 @@ If you are using a virtual environment, activate it first.
 
 Install the required packages from the project configuration.
 
+## Git Large File Storage (LFS)
+
+This repository uses Git LFS for large CSV datasets. CSV files in `data/` may be tracked with LFS via `/.gitattributes` so that large binaries are stored efficiently on the remote.
+
+Quick setup:
+
+```bash
+# Install Git LFS (one-time)
+curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+sudo apt-get install git-lfs
+git lfs install
+
+# If you add large CSVs later, ensure they are tracked (already configured in .gitattributes):
+git add <large-file.csv>
+git commit -m "Add large CSV via LFS"
+git push origin main
+```
+
+If you have previously committed large files to Git and need to migrate them to LFS, follow Git LFS migration instructions; for example:
+
+```bash
+# Migrate existing CSVs into LFS (careful: rewrites history)
+git lfs migrate import --include="data/*.csv"
+# Then force-push after migration
+git push --force-with-lease origin main
+```
+
+Only perform history rewrite if you understand the implications for collaborators.
+
 ---
 
 ## Suggested Development Flow
