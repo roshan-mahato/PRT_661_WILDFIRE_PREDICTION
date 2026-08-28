@@ -223,8 +223,7 @@ __marimo__/
 chat_session/
 
 # Large data files - too big for GitHub
-data/
-*.csv
+# Removed `data/` and `*.csv` so CSVs can be tracked (use Git LFS via .gitattributes)
 *.zip
 raw_nasa_firms/
 raw_nasa_firms_processed/
