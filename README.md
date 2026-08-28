@@ -164,10 +164,7 @@ This repository uses Git LFS for large CSV datasets. CSV files in `data/` may be
 Quick setup:
 
 ```bash
-# Install Git LFS (one-time)
-curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
-sudo apt-get install git-lfs
-git lfs install
+
 
 # If you add large CSVs later, ensure they are tracked (already configured in .gitattributes):
 git add <large-file.csv>
@@ -185,6 +182,64 @@ git push --force-with-lease origin main
 ```
 
 Only perform history rewrite if you understand the implications for collaborators.
+
+## Installation (Windows, Linux, macOS)
+
+Follow the steps below to set up the project on your operating system. These instructions cover installing Git, Git LFS, Python, creating a virtual environment, and installing Python dependencies.
+
+- Windows (PowerShell / Admin):
+
+```powershell
+# Install Git: https://git-scm.com/download/win (run installer)
+# Install Git LFS (one-time):
+choco install git-lfs -y
+git lfs install
+
+# Create Python venv and install deps
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -U pip
+pip install -r requirements.txt
+```
+
+- Linux (Debian/Ubuntu):
+
+```bash
+# Install Git and Git LFS
+sudo apt update
+sudo apt install -y git curl
+curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+sudo apt install -y git-lfs
+git lfs install
+
+# Create Python venv and install deps
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+- macOS (Homebrew):
+
+```bash
+# Install Homebrew (if needed) and Git
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install git
+brew install git-lfs
+git lfs install
+
+# Create Python venv and install deps
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+```
+
+Notes:
+
+- The repository already configures Git LFS via `/.gitattributes` for large CSVs. Use `git lfs install` once per machine.
+- If you use `poetry` or `uv` for environment and dependency management, adapt the venv/`pip install` steps accordingly.
+- If you need to migrate already-committed large files into LFS, see the Git LFS migration snippet above.
 
 ---
 
