@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bcrypt
 from backend.database import engine, SessionLocal
 from backend.db_model.base import Base
-from backend.db_model.nasa_firms import NASAFirms
+from backend.db_model.nasa_firms_historical import NASAFirms
 
 def init_db():
     print("Initializing database...")

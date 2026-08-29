@@ -11,7 +11,7 @@ class NASAFirms(Base):
     Columns are based on the NASA FIRMS DATASET, API Response.
     """
 
-    __tablename__ = 'nasa_firms'
+    __tablename__ = 'nasa_firms_historical'
 
     id = Column(Integer, primary_key=True, index=True)
     
