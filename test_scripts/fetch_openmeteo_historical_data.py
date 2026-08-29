@@ -9,8 +9,8 @@ import requests_cache
 from retry_requests import retry
  
 # ---------- CONFIG ----------
-FIRMS_CSV_PATH = "data/fire_archive_SV-C2_792465.csv"
-OUTPUT_CSV_PATH = "data/weather_data.csv"
+FIRMS_CSV_PATH = "data/fire_nrt_SV-C2_792465.csv"
+OUTPUT_CSV_PATH = "data/all_weather_data.csv"
 PROGRESS_LOG_PATH = "data/fetch_progress.log"
  
 GRID_SIZE_DEGREES = 0.5   # ~55km cells — better spatial precision, ~4 days to complete with the daily budget below

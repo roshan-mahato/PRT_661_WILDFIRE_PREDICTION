@@ -233,3 +233,5 @@ chat_session/raw_firms_data/
 *.db
 *.sqlite
 *.sqlite3
+
+data/old_data_unnecessary
