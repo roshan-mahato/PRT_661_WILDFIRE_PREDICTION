@@ -1,3 +1,22 @@
+<<<<<<< HEAD
+VIIRS SNPP (Suomi NPP) — Best for Training Data
+
+✓ Longest historical record (2012-present = 14+ years)
+✓ Most fire detections for Australia
+✓ Mature, well-calibrated instrument
+Use for: Historical analysis, training datasets
+
+
+VIIRS NOAA-21 — Latest & Best
+
+Newest satellite (launched 2021)
+Best sensor calibration
+Limited historical data (only since 2022)
+Use for: Real-time monitoring, recent predictions
+
+
+USE VIIRS_SNPP For data preprocessing/ML training
+=======
 VIIRS SNPP FIRMS Data from 2024 to 26/08/2026
 
 // fire_archive_SV-C2_792465.csv
@@ -14,3 +33,4 @@ NRT datasets are not classified according to the type
 
 So archieve dataset can be used for ML model training
 and nrt dataset can be used for testing.
+>>>>>>> main

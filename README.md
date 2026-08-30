@@ -157,6 +157,8 @@ If you are using a virtual environment, activate it first.
 
 Install the required packages from the project configuration.
 
+<<<<<<< HEAD
+=======
 ## Git Large File Storage (LFS)
 
 This repository uses Git LFS for large CSV datasets. CSV files in `data/` may be tracked with LFS via `/.gitattributes` so that large binaries are stored efficiently on the remote.
@@ -241,6 +243,7 @@ Notes:
 - If you use `poetry` or `uv` for environment and dependency management, adapt the venv/`pip install` steps accordingly.
 - If you need to migrate already-committed large files into LFS, see the Git LFS migration snippet above.
 
+>>>>>>> main
 ---
 
 ## Suggested Development Flow
