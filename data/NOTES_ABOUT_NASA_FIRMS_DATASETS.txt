@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 VIIRS SNPP (Suomi NPP) — Best for Training Data
 
 ✓ Longest historical record (2012-present = 14+ years)
@@ -15,3 +16,21 @@ Use for: Real-time monitoring, recent predictions
 
 
 USE VIIRS_SNPP For data preprocessing/ML training
+=======
+VIIRS SNPP FIRMS Data from 2024 to 26/08/2026
+
+// fire_archive_SV-C2_792465.csv
+fire_archive_SV-C2_792465.csv, all the history datasets,
+classification vegetation-fire filter to keep both 
+type == 0 (confirmed vegetation) and 
+type == -1 (unclassified NRT) — only actively excluding 
+type == 1/2/3 (volcano/industrial/offshore).
+
+
+// fire_nrt_SV-C2_792465.csv
+NRT datasets are not classified according to the type
+
+
+So archieve dataset can be used for ML model training
+and nrt dataset can be used for testing.
+>>>>>>> main
