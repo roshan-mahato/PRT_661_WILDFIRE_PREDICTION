@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "bcrypt>=5.0.0",
+    "folium>=0.20.0",
     "numpy>=2.5.2",
     "openmeteo-requests>=1.7.5",
     "pandas>=3.0.5",
@@ -13,4 +14,5 @@ dependencies = [
     "retry-requests>=2.0.0",
     "sqlalchemy>=2.0.52",
     "streamlit>=1.62.0",
+    "streamlit-folium>=0.27.4",
 ]
