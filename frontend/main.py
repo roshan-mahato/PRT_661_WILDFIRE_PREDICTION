@@ -18,11 +18,10 @@ header = render_header()
 insights = render_insights_row()
 
 # Map Component
-df = pd.DataFrame(
-    {
-        "latitude": [-33.86, -32.50, -34.10],
-        "longitude": [151.20, 151.10, 150.80],
-        "intensity": [8500, 4200, 9100],
-    }
-)
-map_section = render_map_with_insights(df, "New South Wales")
+hotspots_json = [
+    {"latitude": -33.8688, "longitude": 151.2093, "intensity": 8500},
+    {"latitude": -32.5000, "longitude": 151.1000, "intensity": 4200},
+    {"latitude": -34.1000, "longitude": 150.8000, "intensity": 9100},
+]
+
+render_map_with_insights(hotspots_json, region="New South Wales")
