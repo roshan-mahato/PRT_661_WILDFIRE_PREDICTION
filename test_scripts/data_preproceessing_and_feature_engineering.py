@@ -31,7 +31,6 @@ TYPE_TOKEEP = [0]
 firms_df = pd.read_csv('data\\fire_archive_SV-C2_792465.csv')
 
 weather_df = pd.read_csv('data\\all_weather_data.csv')
-
 """# MERGING DATA"""
 
 def merge_frims_weather(firm_df, weather_df):
@@ -90,6 +89,70 @@ merged_df.head(10)
 
 merged_df.info()
 
+"""# Handling Outliers"""
+
+def handle_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Two-tier outlier handling on raw weather columns, run as part of
+    preprocessing, before feature engineering:
+
+      TIER 1 -- Physical implausibility (PHYSICAL_BOUNDS): these are data
+      errors (sensor glitches, unit mixups, bad fetches) -- rows outside
+      these ranges are DROPPED.
+
+      TIER 2 -- Statistical outliers (IQR, 1.5x rule): these are FLAGGED
+      only, never dropped or altered. A genuinely extreme-hot, extreme-dry,
+      extreme-windy day is exactly the kind of day a fire-risk system needs
+      to predict correctly -- removing it because it's statistically rare
+      would strip out the most important rows in the whole dataset.
+    """
+    PHYSICAL_BOUNDS = {
+    "temperature_2m":       (-10.0, 55.0),   # deg C
+    "relative_humidity_2m": (0.0, 100.0),    # %
+    "wind_speed_10m":       (0.0, 200.0),    # km/h
+    "wind_gusts_10m":       (0.0, 250.0),    # km/h
+    "precipitation":        (0.0, 500.0),    # mm/day (generous -- allows extreme rain events)
+    }
+    df = df.copy()
+    n_start = len(df)
+
+    # ---- Tier 1: physical bounds -> drop ----
+    cols_present = [c for c in PHYSICAL_BOUNDS if c in df.columns]
+    out_of_bounds_mask = pd.Series(False, index=df.index)
+    for col in cols_present:
+        low, high = PHYSICAL_BOUNDS[col]
+        bad = ~df[col].between(low, high)
+        n_bad = int(bad.sum())
+        if n_bad:
+            log.warning(f"{n_bad:,} rows have physically implausible '{col}' "
+                        f"(outside {low}-{high}) -- dropping.")
+        out_of_bounds_mask |= bad.fillna(False)
+
+    if out_of_bounds_mask.any():
+        df = df[~out_of_bounds_mask].reset_index(drop=True)
+
+    print(f"Outlier handling (physical bounds): {n_start:,} -> {len(df):,} rows "
+             f"(-{n_start - len(df):,})")
+
+    # ---- Tier 2: statistical outliers (IQR) -> flag only, never drop ----
+    outlier_flag = pd.Series(False, index=df.index)
+    for col in cols_present:
+        q1, q3 = df[col].quantile([0.25, 0.75])
+        iqr = q3 - q1
+        lower_fence = q1 - 1.5 * iqr
+        upper_fence = q3 + 1.5 * iqr
+        col_outlier = ~df[col].between(lower_fence, upper_fence)
+        outlier_flag |= col_outlier.fillna(False)
+
+    df["weather_outlier_flag"] = outlier_flag
+    n_flagged = int(outlier_flag.sum())
+    print(f"{n_flagged:,} rows ({100*n_flagged/max(len(df),1):.2f}%) flagged as "
+             f"statistical weather outliers (kept, not removed -- these are "
+             f"likely genuine extreme-weather days, exactly the rows a "
+             f"fire-risk model needs to see).")
+
+    return df
+
 """# CLEANING AND DATA PREPROCESSING"""
 
 def preprocess(df):
@@ -124,6 +187,18 @@ def preprocess(df):
     n_before = len(df)
     df = df[df['type'].isin(TYPE_TOKEEP)].copy()
     print(f"Dropped {n_before - len(df):,} Keeping rows with Vegetation fire only, type = 0.")
+
+
+    # ---- Outlier handling (physical bounds drop + statistical flag) -------
+    df = handle_outliers(df)
+
+    # ---- Drop columns that are entirely null -------------------------------
+    # (e.g. a weather variable requested from the API but never actually
+    # populated -- keeping an all-null column adds noise for no benefit)
+    all_null_cols = [c for c in df.columns if df[c].isna().all()]
+    if all_null_cols:
+        print(f"Dropping columns that are 100% null: {all_null_cols}")
+        df = df.drop(columns=all_null_cols)
 
   # ---- Sort chronologically per grid cell -------------------------------
     lat_col = "lat_round" if "lat_round" in df.columns else "latitude"
@@ -233,6 +308,16 @@ def compute_kbdi_and_df(group):
                               # this from antecedent conditions if known.
     n_dry_days = 0.0
     last_rain_amt = 0.0
+
+    # FIX 1: rain-event tracking. The original version subtracted the 5mm
+    # canopy-interception buffer on every rainy row -- across a multi-day
+    # rain spell that means the same interception gets subtracted 2, 3, 4+
+    # times, which isn't what KBDI's interception term represents (it's a
+    # one-off loss at the *start* of a rain event, since canopy/litter can
+    # only intercept so much once it's already saturated).
+    in_rain_event = False
+    event_cumulative_rain = 0.0
+
     cell_start_date = dates[0]
 
     for i in range(n):
@@ -242,9 +327,27 @@ def compute_kbdi_and_df(group):
         dt = gaps_days[i]
 
         # ---- KBDI update (metric form) ----
-        # Net rainfall: first 5mm of a rain event is intercepted/does not
-        # reduce drought index (canopy/litter interception).
-        net_rain = max(rain_mm - 5.0, 0.0) if rain_mm > 0 else 0.0
+        if rain_mm > 0:
+            if not in_rain_event:
+                # First day of a new rain event: apply the 5mm interception
+                # buffer once.
+                net_rain = max(rain_mm - 5.0, 0.0)
+                in_rain_event = True
+                event_cumulative_rain = rain_mm
+            else:
+                # Continuing an existing rain event: no repeated
+                # interception, the buffer already applied.
+                net_rain = rain_mm
+                event_cumulative_rain += rain_mm
+        else:
+            net_rain = 0.0
+            if in_rain_event:
+                # Event just ended -- bank its total for Drought Factor's
+                # "last rain event amount" (P), then reset.
+                last_rain_amt = event_cumulative_rain
+                in_rain_event = False
+                event_cumulative_rain = 0.0
+
         q_after_rain = max(q_prev - net_rain * 10, 0.0)  # mm -> KBDI units (x10)
 
         dq = ((203.2 - q_after_rain) *
@@ -257,9 +360,13 @@ def compute_kbdi_and_df(group):
         q_prev = q_new
 
         # ---- Days since rain / last rain amount (for Drought Factor) ----
-        if rain_mm >= 2.0:  # "significant" rainfall threshold
+        # FIX 2: last_rain_amt now holds the *total* rainfall of the most
+        # recently completed rain event (banked above when the event ends),
+        # not just a single day's rainfall -- matching Griffiths' P, which is
+        # defined as the rainfall recorded in the last rain period, not the
+        # last individual day it rained.
+        if rain_mm >= 2.0:
             n_dry_days = 0.0
-            last_rain_amt = rain_mm
         else:
             n_dry_days += dt
         days_since_rain[i] = n_dry_days
@@ -323,6 +430,47 @@ def engineer_features(df):
 
     df = df.copy()
     df["acq_date"] = pd.to_datetime(df["acq_date"])
+
+    # ---- IMPROVEMENT: explicit missing-value handling ----
+    # Previously, NaNs in weather columns would silently propagate through
+    # every downstream formula and only surface at validate_output() at the
+    # very end -- by then it's unclear which stage introduced them. Handling
+    # it here, explicitly, means a bad live-fetch batch or a partial weather
+    # match fails loudly and immediately instead of quietly corrupting FFDI.
+    critical_cols = ["temperature_2m", "relative_humidity_2m", "wind_speed_10m"]
+    n_before = len(df)
+    n_missing_critical = df[critical_cols].isna().any(axis=1).sum()
+    if n_missing_critical:
+        print(f"{n_missing_critical:,} rows have missing temperature/"
+                    f"humidity/wind -- dropping them (can't compute fire danger "
+                    f"indices without these).")
+        df = df[~df[critical_cols].isna().any(axis=1)].reset_index(drop=True)
+
+    # Precipitation missing is treated differently: a missing rain reading
+    # most plausibly means "no rain recorded" rather than "unknown," so we
+    # fill rather than drop -- but log how often this happens, since a high
+    # rate would mean that assumption is wrong for this data.
+    n_missing_precip = df["precipitation"].isna().sum()
+    if n_missing_precip:
+        print(f"{n_missing_precip:,} rows ({100*n_missing_precip/len(df):.2f}%) "
+                    f"had missing precipitation -- filled with 0.")
+        df["precipitation"] = df["precipitation"].fillna(0.0)
+
+    if len(df) < n_before:
+        print(f"Rows after missing-value handling: {len(df):,} (was {n_before:,})")
+
+    # ---- IMPROVEMENT: wind-speed unit sanity check ----
+    # FFDI's coefficients assume km/h. If the weather source is ever
+    # reconfigured (or a live-fetch config drifts) to return m/s instead,
+    # every FFDI value silently comes out wrong with no error -- this just
+    # warns if the data looks implausible for km/h.
+    median_wind = df["wind_speed_10m"].median()
+    if median_wind < 3:
+        print(f"Median wind_speed_10m is {median_wind:.2f} -- unusually low "
+                    f"for km/h. Confirm this isn't actually in m/s before trusting FFDI.")
+    elif median_wind > 120:
+        print(f"Median wind_speed_10m is {median_wind:.2f} -- unusually high "
+                    f"for km/h. Confirm units before trusting FFDI.")
 
     # ---- EMC (vectorised, no recursion needed) ----
     df["emc"] = compute_emc(
