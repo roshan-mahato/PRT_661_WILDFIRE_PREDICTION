@@ -15,9 +15,9 @@ def render_map_with_insights(hotspots_json: list[dict[str, Any]], region: str):
             "Australia (National)": ([-25.2744, 133.7751], 4),
             "New South Wales": ([-33.8688, 151.2093], 6),
             "Victoria": ([-37.8136, 144.9631], 7),
-            "Queensland": ([-27.4705, 153.0260], 5),
+            "Queensland": ([-27.4705, 153.0260], 6),
         }
-        center, zoom = region_views.get(region, ([-25.2744, 133.7751], 4))
+        center, zoom = region_views.get(region, ([-25.2744, 133.7751], 6))
 
         attr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>'
         tiles = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_2s99_1_503a3a7bf96ca39604de30b4"

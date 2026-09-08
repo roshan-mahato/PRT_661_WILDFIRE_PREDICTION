@@ -25,7 +25,7 @@ hotspots_json = [
     {"latitude": -34.1000, "longitude": 150.8000, "intensity": 9100},
 ]
 
-render_map_with_insights(hotspots_json, region="New South Wales")
+render_map_with_insights(hotspots_json, region=header)
 
 # Charts
 data = get_state_data(header)
