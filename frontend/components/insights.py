@@ -1,12 +1,13 @@
 import streamlit as st
+from utils.theme import COLORS
 
 
 def render_insight_card(
     title: str,
     body_text: str,
-    border_color: str = "#313642",
-    bg_color: str = "#1e222a",
-    text_color: str = "#FFFFFF",
+    border_color: str = COLORS["border"],
+    bg_color: str = COLORS["bg"],
+    text_color: str = COLORS["text"],
 ):
     """Renders a single container box with rounded borders and styled text."""
     st.markdown(
@@ -41,7 +42,7 @@ def render_insight_card(
 
 def render_insights_row(df=None):
     """Renders a 4-column layout of rounded insight boxes matching your wireframe."""
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         render_insight_card(
