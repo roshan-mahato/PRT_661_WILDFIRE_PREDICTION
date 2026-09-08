@@ -1,10 +1,11 @@
-import streamlit as st
+import re
 
-import numpy as np
-import pandas as pd
+import streamlit as st
+from components.charts import render_insights_section
 from components.headers import render_header
 from components.insights import render_insights_row
-from components.map_section import render_map_with_insights 
+from components.map_section import render_map_with_insights
+from utils.mock_data import get_state_data
 
 st.set_page_config(
     page_title="Wildfire Prediction Platform",
@@ -25,3 +26,7 @@ hotspots_json = [
 ]
 
 render_map_with_insights(hotspots_json, region="New South Wales")
+
+# Charts
+data = get_state_data(header)
+render_insights_section(data)

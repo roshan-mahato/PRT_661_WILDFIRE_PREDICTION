@@ -1,14 +1,14 @@
-from typing import Any,Dict,List
+from typing import Any
+
 import folium
-from folium.plugins import HeatMap
 import streamlit as st
+from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 
-def render_map_with_insights(
-        hotspots_json: List[Dict[str, Any]], region: str
-):
+
+def render_map_with_insights(hotspots_json: list[dict[str, Any]], region: str):
     """Renders 80% Folium Map (left) and  20% Threat summary (Right) using raw JSON payloald."""
-    map_col, right_col = st.columns([8,2])
+    map_col, right_col = st.columns([8, 2])
 
     with map_col:
         region_views = {
@@ -19,7 +19,7 @@ def render_map_with_insights(
         }
         center, zoom = region_views.get(region, ([-25.2744, 133.7751], 4))
 
-        attr = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>')
+        attr = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, &copy; <a href="https://carto.com/attributions">CARTO</a>'
         tiles = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_2s99_1_503a3a7bf96ca39604de30b4"
 
         # Base map initialization
@@ -28,7 +28,7 @@ def render_map_with_insights(
             zoom_start=zoom,
             tiles=tiles,
             control_scale=False,
-            attr=attr
+            attr=attr,
         )
 
         if hotspots_json:
@@ -74,7 +74,7 @@ def render_map_with_insights(
     with right_col:
         st.markdown(
             """
-            <div style=" 
+            <div style="
                 border: 1px solid #313642;
                 border-radius: 12px;
                 padding: 16px;

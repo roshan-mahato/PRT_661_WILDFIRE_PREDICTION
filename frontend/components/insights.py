@@ -1,5 +1,6 @@
 import streamlit as st
 
+
 def render_insight_card(
     title: str,
     body_text: str,
@@ -40,7 +41,7 @@ def render_insight_card(
 
 def render_insights_row(df=None):
     """Renders a 4-column layout of rounded insight boxes matching your wireframe."""
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         render_insight_card(
@@ -64,6 +65,6 @@ def render_insights_row(df=None):
 
     with col4:
         render_insight_card(
-            title=  "Wind Trajectory",
+            title="Wind Trajectory",
             body_text="South-West gusting at 45 km/h driving perimeter.",
         )
