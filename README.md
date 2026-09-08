@@ -1,3 +1,4 @@
+
 # PRT_661_WILDFIRE_PREDICTION
 
 ## Table of Contents
@@ -23,19 +24,19 @@
 
 ## Real-Time Wildfire Risk Tracking and Prediction System for Australia
 
-A real-time, web-based system that tracks wildfire risk and predicts fire danger up to 7 days (168 hours) ahead across Australia. The system combines satellite hotspot data, weather forecasts, and a hybrid physics + machine learning engine to support emergency services, land managers, researchers, and local communities.
+A real-time, web-based system that tracks wildfire risk across Australia and predicts next-day fire danger. The system combines satellite hotspot data, historical weather data, and a hybrid physics + machine learning engine to support emergency services, land managers, researchers, and local communities.
 
 ---
 
 ## Project Overview
 
-The system ingests real-time satellite fire data and numerical weather forecasts, processes them through a validated ETL pipeline, and applies both the **McArthur Forest Fire Danger Index (FFDI)** and a supervised ML classifier (XGBoost / Random Forest) to estimate fire danger ratings and rapid-spread probabilities at a local, sub-regional scale.
+The system ingests satellite fire hotspot data and historical weather data, processes them through a validated ETL pipeline, and applies the **McArthur Forest Fire Danger Index (FFDI)** together with a supervised ML classifier to predict the **next-day FFDI danger band** at a local, sub-regional scale.
 
 ### Core Objectives
 
-- **Asynchronous Data Ingestion** — Low-latency REST connections to NASA FIRMS (satellite hotspots), Open-Meteo (7-day weather forecasts), and air quality data.
-- **Feature Engineering & ETL** — Spatial filtering (Haversine radial buffer), AEST timestamp conversion, and fuel moisture index generation.
-- **Hybrid Analytics Engine** — McArthur FFDI physics baseline combined with a tree-based ML classifier for rapid fire-spread probability.
+- **Data Ingestion** — REST connections to NASA FIRMS (satellite hotspots) and Open-Meteo (historical weather data).
+- **Feature Engineering & ETL** — Spatial-temporal grid aggregation, EMC/KBDI/Drought Factor derivation, and FFDI/Rate of Spread calculation.
+- **Hybrid Analytics Engine** — McArthur FFDI physics baseline combined with a tree-based ML classifier to predict next-day FFDI band.
 - **Persistent Storage** — 3NF-normalised SQLite database for caching, query logs, predictions, and offline fallback.
 - **Interactive Dashboard** — Streamlit app with Folium GIS mapping and Plotly forecast timelines.
 
@@ -157,8 +158,6 @@ If you are using a virtual environment, activate it first.
 
 Install the required packages from the project configuration.
 
-<<<<<<< HEAD
-=======
 ## Git Large File Storage (LFS)
 
 This repository uses Git LFS for large CSV datasets. CSV files in `data/` may be tracked with LFS via `/.gitattributes` so that large binaries are stored efficiently on the remote.
@@ -243,7 +242,6 @@ Notes:
 - If you use `poetry` or `uv` for environment and dependency management, adapt the venv/`pip install` steps accordingly.
 - If you need to migrate already-committed large files into LFS, see the Git LFS migration snippet above.
 
->>>>>>> main
 ---
 
 ## Suggested Development Flow
