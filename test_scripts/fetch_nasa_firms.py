@@ -26,6 +26,9 @@ Before running:
 """
 
 import os
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import requests
 from dotenv import load_dotenv
@@ -38,15 +41,19 @@ load_dotenv()
 
 # ---------- CONFIG ----------
 MAP_KEY = os.getenv("FIRMS_MAP_KEY")
-SOURCE = "VIIRS_SNPP_NRT"   # matches the VIIRS SNPP sensor used in your historical dataset
-DAY_RANGE = 1                # 1 = most recent available data only
+SOURCE = (
+    "VIIRS_SNPP_NRT"  # matches the VIIRS SNPP sensor used in your historical dataset
+)
+DAY_RANGE = 1  # 1 = most recent available data only
 
 # Bounding box for mainland Australia + Tasmania: west,south,east,north
 AUSTRALIA_BBOX = "112,-44,154,-10"
 
 OUTPUT_CSV_PATH = "data/live_hotspots.csv"
-DB_URL = "sqlite:///data/wildfire_db.db"   # <-- change if using Postgres/MySQL etc
-GRID_SIZE_DEGREES = 0.5   # matches your historical grid, for consistent joins with live weather
+DB_URL = "sqlite:///data/wildfire_db.db"  # <-- change if using Postgres/MySQL etc
+GRID_SIZE_DEGREES = (
+    0.5  # matches your historical grid, for consistent joins with live weather
+)
 
 
 def round_to_grid(value, grid_size):
@@ -67,14 +74,19 @@ def fetch_live_hotspots():
 
     # The API returns raw CSV text directly in the response body
     from io import StringIO
+
     df = pd.read_csv(StringIO(response.text))
 
     if df.empty:
         print("No active hotspots returned for this window.")
         return df
 
-    df["lat_round"] = df["latitude"].apply(lambda v: round_to_grid(v, GRID_SIZE_DEGREES))
-    df["lon_round"] = df["longitude"].apply(lambda v: round_to_grid(v, GRID_SIZE_DEGREES))
+    df["lat_round"] = df["latitude"].apply(
+        lambda v: round_to_grid(v, GRID_SIZE_DEGREES)
+    )
+    df["lon_round"] = df["longitude"].apply(
+        lambda v: round_to_grid(v, GRID_SIZE_DEGREES)
+    )
     df["fetched_at"] = pd.Timestamp.now(tz="UTC")
 
     return df
@@ -103,17 +115,32 @@ def save_to_db(df):
         print("No new hotspots to insert (all already in the database).")
         return
 
-    insert_df = new_rows.rename(columns={
-        "brightness": "bright_ti4",
-        "bright_t31": "bright_ti5",
-    })
+    insert_df = new_rows.rename(
+        columns={
+            "brightness": "bright_ti4",
+            "bright_t31": "bright_ti5",
+        }
+    )
     insert_df["acq_time"] = insert_df["acq_time"].astype(int)
 
     model_columns = [
-        "latitude", "longitude", "lat_round", "lon_round",
-        "bright_ti4", "bright_ti5", "scan", "track",
-        "acq_date", "acq_time", "satellite", "instrument",
-        "confidence", "version", "frp", "daynight", "fetched_at",
+        "latitude",
+        "longitude",
+        "lat_round",
+        "lon_round",
+        "bright_ti4",
+        "bright_ti5",
+        "scan",
+        "track",
+        "acq_date",
+        "acq_time",
+        "satellite",
+        "instrument",
+        "confidence",
+        "version",
+        "frp",
+        "daynight",
+        "fetched_at",
     ]
     # Only keep columns that actually exist in this response (some FIRMS
     # sources omit certain fields)
@@ -122,7 +149,9 @@ def save_to_db(df):
     insert_df[model_columns].to_sql(
         FirmsLive.__tablename__, engine, if_exists="append", index=False
     )
-    print(f"Inserted {len(insert_df)} new hotspot rows into '{FirmsLive.__tablename__}'.")
+    print(
+        f"Inserted {len(insert_df)} new hotspot rows into '{FirmsLive.__tablename__}'."
+    )
 
 
 def main():
@@ -146,3 +175,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+COUNTRY_CODE = "AUS"
+QUERY_METHOD = country

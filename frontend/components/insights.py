@@ -1,11 +1,13 @@
 import streamlit as st
+from utils.theme import COLORS
+
 
 def render_insight_card(
     title: str,
     body_text: str,
-    border_color: str = "#313642",
-    bg_color: str = "#1e222a",
-    text_color: str = "#FFFFFF",
+    border_color: str = COLORS["border"],
+    bg_color: str = COLORS["bg"],
+    text_color: str = COLORS["text"],
 ):
     """Renders a single container box with rounded borders and styled text."""
     st.markdown(
@@ -64,6 +66,6 @@ def render_insights_row(df=None):
 
     with col4:
         render_insight_card(
-            title=  "Wind Trajectory",
+            title="Wind Trajectory",
             body_text="South-West gusting at 45 km/h driving perimeter.",
         )

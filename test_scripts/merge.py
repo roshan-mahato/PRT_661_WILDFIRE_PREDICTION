@@ -28,7 +28,7 @@ import pandas as pd
 FIRMS_CSV_PATH = "data/fire_archive_SV-C2_792465.csv"
 WEATHER_CSV_PATH = "data/all_weather_data.csv"
 OUTPUT_CSV_PATH = "data/firms_weather_merged.csv"
-GRID_SIZE_DEGREES = 0.5   # must match what was used in fetch_weather_csv.py
+GRID_SIZE_DEGREES = 0.5  # must match what was used in fetch_weather_csv.py
 
 
 def round_to_grid(value, grid_size):
@@ -39,8 +39,12 @@ def load_and_prepare_firms(path):
     df = pd.read_csv(path)
     df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.strftime("%Y-%m-%d")
     df["acq_hour"] = df["acq_time"].astype(str).str.zfill(4).str[:2].astype(int)
-    df["lat_round"] = df["latitude"].apply(lambda v: round_to_grid(v, GRID_SIZE_DEGREES))
-    df["lon_round"] = df["longitude"].apply(lambda v: round_to_grid(v, GRID_SIZE_DEGREES))
+    df["lat_round"] = df["latitude"].apply(
+        lambda v: round_to_grid(v, GRID_SIZE_DEGREES)
+    )
+    df["lon_round"] = df["longitude"].apply(
+        lambda v: round_to_grid(v, GRID_SIZE_DEGREES)
+    )
     return df
 
 
@@ -70,13 +74,17 @@ def main():
     )
 
     matched = merged["temperature_2m"].notna().sum()
-    print(f"Matched weather data for {matched}/{len(merged)} hotspot records "
-          f"({matched/len(merged)*100:.1f}%).")
+    print(
+        f"Matched weather data for {matched}/{len(merged)} hotspot records "
+        f"({matched / len(merged) * 100:.1f}%)."
+    )
 
     if matched < len(merged):
         missing = len(merged) - matched
-        print(f"Note: {missing} records have no weather match yet — this is "
-              f"expected if fetch_weather_csv.py hasn't finished all calls.")
+        print(
+            f"Note: {missing} records have no weather match yet — this is "
+            f"expected if fetch_weather_csv.py hasn't finished all calls."
+        )
 
     merged.to_csv(OUTPUT_CSV_PATH, index=False)
     print(f"Saved merged dataset to {OUTPUT_CSV_PATH} ({len(merged)} rows).")
