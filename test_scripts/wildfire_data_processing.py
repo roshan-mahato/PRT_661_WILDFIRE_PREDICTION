@@ -690,8 +690,14 @@ final_df.head(15)
 
 """## 8. Validation"""
 
-def validate_output(df):
-    """Schema + range sanity checks before saving."""
+def validate_output(df, raise_threshold=0):
+    """
+    Schema + range sanity checks before saving.
+
+    Returns a dict of violation counts per check (range issues + null count).
+    Raises ValueError if total violations exceed raise_threshold.
+    Set raise_threshold=float('inf') to only log warnings and never raise.
+    """
     print("Validating final output...")
     required_cols = ["emc", "kbdi", "drought_factor", "ffdi", "rate_of_spread",
                       "kbdi_spinup_flag", "label"]
@@ -706,19 +712,34 @@ def validate_output(df):
         "ffdi": df["ffdi"] >= 0,
         "rate_of_spread": df["rate_of_spread"] >= 0,
     }
+
+    violations = {}
     for col, mask in checks.items():
         n_bad = int((~mask).sum())
+        violations[col] = n_bad
         if n_bad:
             print(f"WARNING: {n_bad:,} rows have out-of-range '{col}'.")
         else:
             print(f"'{col}' range check passed.")
 
-    n_nulls = df[required_cols].isna().sum().sum()
+    n_nulls = int(df[required_cols].isna().sum().sum())
+    violations["nulls"] = n_nulls
     if n_nulls:
         print(f"WARNING: {n_nulls:,} nulls found across engineered columns.")
     else:
         print("No nulls in engineered columns.")
-    print("Validation complete.")
+
+    total_violations = sum(violations.values())
+    print(f"Validation complete. Total violations: {total_violations:,}")
+
+    if total_violations > raise_threshold:
+        raise ValueError(
+            f"validate_output found {total_violations:,} violations "
+            f"(threshold={raise_threshold}). Breakdown: {violations}"
+        )
+
+    return violations
+
 
 validate_output(final_df)
 
