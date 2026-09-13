@@ -1,4 +1,3 @@
-
 # PRT_661_WILDFIRE_PREDICTION
 
 ## Table of Contents
