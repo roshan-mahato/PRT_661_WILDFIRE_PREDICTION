@@ -1,0 +1,98 @@
+{
+  "trained_at": "2026-09-15T14:43:57",
+  "split": "temporal",
+  "features": [
+    "wind_gusts_10m",
+    "soil_moisture_0_to_7cm",
+    "temperature_2m",
+    "et0_fao_evapotranspiration",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "emc",
+    "relative_humidity_2m",
+    "vapour_pressure_deficit",
+    "rate_of_spread",
+    "ffdi",
+    "precipitation",
+    "month_cos",
+    "days_since_rain",
+    "kbdi",
+    "drought_factor",
+    "month_sin",
+    "lat_round",
+    "lon_round"
+  ],
+  "dropped_features": [
+    "days_since_cell_start"
+  ],
+  "days_since_rain_cap": 180.0,
+  "threshold_f1_optimal": 0.2040727264034582,
+  "rows": {
+    "train": 107551,
+    "val": 40090,
+    "test": 52635
+  },
+  "metrics": [
+    {
+      "split": "validation @0.50",
+      "threshold": 0.5,
+      "accuracy": 0.8249,
+      "balanced_accuracy": 0.7285,
+      "precision_fire": 0.9276,
+      "recall_fire": 0.8632,
+      "f1_fire": 0.8943,
+      "roc_auc": 0.807,
+      "pr_auc": 0.9528,
+      "tn": 3385,
+      "fp": 2316,
+      "fn": 4703,
+      "tp": 29686
+    },
+    {
+      "split": "validation @tuned",
+      "threshold": 0.2041,
+      "accuracy": 0.8897,
+      "balanced_accuracy": 0.6526,
+      "precision_fire": 0.8974,
+      "recall_fire": 0.984,
+      "f1_fire": 0.9387,
+      "roc_auc": 0.807,
+      "pr_auc": 0.9528,
+      "tn": 1831,
+      "fp": 3870,
+      "fn": 550,
+      "tp": 33839
+    },
+    {
+      "split": "TEST @0.50",
+      "threshold": 0.5,
+      "accuracy": 0.3425,
+      "balanced_accuracy": 0.5334,
+      "precision_fire": 0.1914,
+      "recall_fire": 0.8306,
+      "f1_fire": 0.3111,
+      "roc_auc": 0.5104,
+      "pr_auc": 0.1729,
+      "tn": 10210,
+      "fp": 33015,
+      "fn": 1594,
+      "tp": 7816
+    },
+    {
+      "split": "TEST @tuned",
+      "threshold": 0.2041,
+      "accuracy": 0.2489,
+      "balanced_accuracy": 0.5354,
+      "precision_fire": 0.1901,
+      "recall_fire": 0.9814,
+      "f1_fire": 0.3184,
+      "roc_auc": 0.5104,
+      "pr_auc": 0.1729,
+      "tn": 3868,
+      "fp": 39357,
+      "fn": 175,
+      "tp": 9235
+    }
+  ],
+  "sanity_check_passed": false
+}

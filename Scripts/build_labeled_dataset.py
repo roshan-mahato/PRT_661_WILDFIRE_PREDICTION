@@ -62,7 +62,7 @@ import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.prediction_engine import (
+from prediction_engine import (
     KBDI_SPINUP_DAYS, MEAN_ANNUAL_RAINFALL_MM, WEATHER_COLS,
     compute_emc, compute_ffdi, compute_ros, kbdi_df_step,
 )
