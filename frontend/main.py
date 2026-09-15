@@ -1,32 +1,84 @@
-import re
+"""
+Wildfire Prediction Platform — Streamlit dashboard.
+
+Reads predictions from the FastAPI backend (backend/app.py). Start the API
+first, then run this:
+
+    uv run uvicorn backend.app:app --reload
+    uv run streamlit run frontend/main.py
+"""
 
 import streamlit as st
+
 from components.charts import render_insights_section
 from components.headers import render_header
 from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
-from utils.mock_data import get_state_data
+from utils.api_client import (
+    check_api_health,
+    fetch_live_predictions,
+    fetch_stored_predictions,
+    refresh_predictions,
+)
+from utils.regions import build_daily_trend, filter_by_region, summarise_region
 
 st.set_page_config(
     page_title="Wildfire Prediction Platform",
     page_icon="🔥",
-    layout="wide",  # <--- Forces wide mode across the browser window
+    layout="wide",
     initial_sidebar_state="collapsed",
 )
-# Renders header component
-header = render_header()
 
-insights = render_insights_row()
+controls = render_header()
+region = controls["region"]
 
-# Map Component
-hotspots_json = [
-    {"latitude": -33.8688, "longitude": 151.2093, "intensity": 8500},
-    {"latitude": -32.5000, "longitude": 151.1000, "intensity": 4200},
-    {"latitude": -34.1000, "longitude": 150.8000, "intensity": 9100},
-]
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+if controls["refresh"]:
+    with st.spinner("Recomputing predictions from the latest weather data..."):
+        _, refresh_error = refresh_predictions()
+    if refresh_error:
+        st.error(refresh_error)
+    else:
+        st.success("Predictions refreshed and saved.")
 
-render_map_with_insights(hotspots_json, region=header)
+healthy, health_message = check_api_health()
+if not healthy:
+    st.warning(f"Prediction API unavailable — {health_message}")
 
-# Charts
-data = get_state_data(header)
-render_insights_section(data)
+if controls["use_live"]:
+    predictions, load_error = fetch_live_predictions()
+    source_label = "computed live from current weather"
+else:
+    predictions, load_error = fetch_stored_predictions(latest_only=True)
+    source_label = "from the last saved prediction run"
+
+if load_error:
+    st.error(load_error)
+
+if predictions.empty and not load_error:
+    st.info(
+        "No predictions available yet. Fetch live weather "
+        "(`uv run python Scripts/fetch_openmeteo_live.py`), then press Refresh."
+    )
+
+# ---------------------------------------------------------------------------
+# Region slice + derived figures
+# ---------------------------------------------------------------------------
+regional = filter_by_region(predictions, region)
+summary = summarise_region(regional, region)
+trend = build_daily_trend(regional)
+
+if summary["has_data"]:
+    st.caption(
+        f"Showing {summary['cell_count']} grid cell(s) for {region} — "
+        f"forecast day {summary['forecast_date']}, {source_label}."
+    )
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+render_insights_row(summary)
+render_map_with_insights(regional, region, summary)
+render_insights_section(trend, summary)

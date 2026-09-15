@@ -10,14 +10,14 @@ from backend.database import SessionLocal, engine
 from backend.db_model.base import Base
 from backend.db_model.nasa_firms import NASAFirms
 from backend.db_model.openmeteo import OpenMeteo
-
+from backend.db_model.firePrediction import FirePrediction
 
 def init_db():
     print("Initializing database...")
     Base.metadata.create_all(bind=engine)
-    print("Database initialized.")
-
-    db = SessionLocal()
+    created = sorted(Base.metadata.tables.keys())
+    print(f"Database initialized at {engine.url.database}")
+    print(f"Tables: {', '.join(created)}")
 
 
 if __name__ == "__main__":

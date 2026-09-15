@@ -1,5 +1,7 @@
 import streamlit as st
-from utils.theme import COLORS
+
+from utils.regions import ffdi_band
+from utils.theme import COLORS, SEVERITY_STYLE
 
 
 def render_insight_card(
@@ -40,32 +42,70 @@ def render_insight_card(
     )
 
 
-def render_insights_row(df=None):
-    """Renders a 4-column layout of rounded insight boxes matching your wireframe."""
+def render_insights_row(summary: dict):
+    """
+    Renders the four headline cards from a region summary produced by
+    utils.regions.summarise_region().
+
+    When there is no data the cards still render, saying so plainly -- an
+    empty row would look like a rendering bug rather than missing data.
+    """
     col1, col2, col3, col4 = st.columns(4)
+
+    if not summary.get("has_data"):
+        for col, title in zip(
+            (col1, col2, col3, col4),
+            ("Cells at Risk", "Risk Level", "Peak FFDI", "Conditions"),
+        ):
+            with col:
+                render_insight_card(
+                    title=title,
+                    body_text="No prediction data available for this region.",
+                    border_color=COLORS["border"],
+                )
+        return
+
+    risk_colour, risk_bg = SEVERITY_STYLE.get(
+        summary["max_risk_level"], (COLORS["border"], COLORS["bg"])
+    )
 
     with col1:
         render_insight_card(
-            title=" Hotspot Count",
-            body_text="80 active fire clusters detected across the region.",
-            border_color="#ff4b4b",
+            title="Cells at Risk",
+            body_text=(
+                f"{summary['at_risk_count']} of {summary['cell_count']} grid cells "
+                f"predicted to see fire activity."
+            ),
+            border_color=COLORS["flame"],
         )
 
     with col2:
         render_insight_card(
-            title=" Risk Level",
-            body_text="Extreme spread probability due to low humidity.",
-            border_color="#ffa500",
+            title="Risk Level",
+            body_text=(
+                f"{summary['max_risk_level']} — peak fire probability "
+                f"{summary['max_probability']:.0%} across the region."
+            ),
+            border_color=risk_colour,
+            bg_color=risk_bg,
         )
 
     with col3:
         render_insight_card(
-            title=" Peak Intensity",
-            body_text="Max radiative power recorded at 9,500 kW/m.",
+            title="Peak FFDI",
+            body_text=(
+                f"{summary['max_ffdi']:.1f} ({ffdi_band(summary['max_ffdi'])}) — "
+                f"regional average {summary['mean_ffdi']:.1f}."
+            ),
+            border_color=COLORS["amber"],
         )
 
     with col4:
         render_insight_card(
-            title="Wind Trajectory",
-            body_text="South-West gusting at 45 km/h driving perimeter.",
+            title="Conditions",
+            body_text=(
+                f"{summary['mean_temp']:.0f}°C, {summary['mean_humidity']:.0f}% humidity, "
+                f"wind {summary['mean_wind']:.0f} km/h."
+            ),
+            border_color=COLORS["spread"],
         )

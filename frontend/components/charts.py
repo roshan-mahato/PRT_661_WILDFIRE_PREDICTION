@@ -4,18 +4,22 @@ Plotly chart components for the wildfire dashboard.
 Four charts, each a small function that renders directly into the current
 Streamlit container:
 
-  1. render_risk_trend           — predicted vs. observed risk index (line/area)
-  2. render_historical_incidents — seasonal incident count (bar)
-  3. render_containment_donut    — containment progress (donut)
-  4. render_factor_weights       — model feature importance (horizontal bar)
+  1. render_risk_trend           — predicted fire probability per forecast day (line/area)
+  2. render_historical_incidents — seasonal incident count (bar) [reference data]
+  3. render_risk_distribution    — grid cells by risk level (donut)
+  4. render_factor_weights       — model feature importance (horizontal bar) [reference data]
 
-They all read colors from styles.theme.COLORS so they stay visually
-consistent with the rest of the app, and take plain dicts/lists as input
-(no Streamlit-specific data types) so they're easy to test or reuse.
+Charts 1 and 3 are driven by live prediction data from the backend. Charts 2
+and 4 still use static reference values from utils.mock_data and should be
+replaced with real figures before submission.
+
+They all read colors from utils.theme.COLORS so they stay visually
+consistent with the rest of the app.
 """
 
 from typing import Dict
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from utils.mock_data import FACTOR_WEIGHTS, HISTORICAL_INCIDENTS, MONTHS
@@ -43,33 +47,46 @@ def _base_layout(height: int = 280, **overrides) -> dict:
 # ----------------------------------------------------------------------------
 # 1. RISK TREND
 # ----------------------------------------------------------------------------
-def render_risk_trend(data: Dict) -> None:
-    """Predicted vs. observed 7-day risk index, as a filled line chart."""
-    pred = data["risk_trend_pred"]
-    obs = data["risk_trend_obs"]
-    days = [f"Day {i + 1}" for i in range(len(pred))]
+def render_risk_trend(trend: "pd.DataFrame") -> None:
+    """
+    Forecast fire probability over the prediction window.
+
+    Shows the regional mean alongside the peak cell: the mean tells you the
+    general trend, while the peak is what actually matters operationally --
+    a low average hides a single cell at extreme risk.
+    """
+    if trend is None or trend.empty:
+        st.markdown(
+            "<div class='chart-title'>Fire Risk Forecast</div>", unsafe_allow_html=True
+        )
+        st.info("No forecast data available for this region.")
+        return
+
+    days = [d.strftime("%a %d %b") for d in pd.to_datetime(trend["acq_date"])]
+    mean_pct = (trend["mean_probability"] * 100).round(1)
+    max_pct = (trend["max_probability"] * 100).round(1)
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=days,
-            y=pred,
-            name="Predicted",
-            mode="lines",
+            y=max_pct,
+            name="Peak cell",
+            mode="lines+markers",
             line=dict(color=COLORS["flame"], width=3),
             fill="tozeroy",
             fillcolor="rgba(242, 84, 91, 0.15)",
-            hovertemplate="%{x}: %{y}<extra>Predicted</extra>",
+            hovertemplate="%{x}: %{y:.1f}%<extra>Peak cell</extra>",
         )
     )
     fig.add_trace(
         go.Scatter(
             x=days,
-            y=obs,
-            name="Observed",
-            mode="lines",
+            y=mean_pct,
+            name="Regional mean",
+            mode="lines+markers",
             line=dict(color=COLORS["text_muted"], width=1.6, dash="dash"),
-            hovertemplate="%{x}: %{y}<extra>Observed</extra>",
+            hovertemplate="%{x}: %{y:.1f}%<extra>Regional mean</extra>",
         )
     )
     fig.update_layout(
@@ -84,17 +101,20 @@ def render_risk_trend(data: Dict) -> None:
                 font=dict(size=11),
             ),
             yaxis=dict(
-                range=[0, 100], gridcolor=GRID_COLOR, title="Risk index", zeroline=False
+                range=[0, 100],
+                gridcolor=GRID_COLOR,
+                title="Fire probability (%)",
+                zeroline=False,
             ),
             xaxis=dict(showgrid=False),
         )
     )
 
     st.markdown(
-        "<div class='chart-title'>Risk Trend (7-day)</div>", unsafe_allow_html=True
+        "<div class='chart-title'>Fire Risk Forecast</div>", unsafe_allow_html=True
     )
     st.markdown(
-        "<div class='chart-sub'>Predicted vs. observed risk index &middot; updates with region</div>",
+        "<div class='chart-sub'>Predicted fire probability per forecast day</div>",
         unsafe_allow_html=True,
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -148,22 +168,47 @@ def render_historical_incidents() -> None:
 
 
 # ----------------------------------------------------------------------------
-# 3. CONTAINMENT DONUT
+# 3. RISK DISTRIBUTION
 # ----------------------------------------------------------------------------
-def render_containment_donut(data: Dict) -> None:
-    """Containment progress for the primary cluster, as a donut chart with
-    supporting stats alongside it."""
-    pct = data["containment_pct"]
+def render_risk_distribution(summary: Dict) -> None:
+    """
+    How the region's grid cells split across risk levels.
+
+    This replaced a containment-progress donut: containment describes fires
+    already burning, which this system does not track -- it predicts risk
+    ahead of ignition, so cells-by-risk-level is the figure the model can
+    actually support.
+    """
+    st.markdown(
+        "<div class='chart-title'>Risk Distribution</div>", unsafe_allow_html=True
+    )
+    st.markdown(
+        "<div class='chart-sub'>Grid cells by predicted risk level &middot; latest forecast day</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not summary.get("has_data"):
+        st.info("No prediction data available for this region.")
+        return
+
+    counts = summary["risk_counts"]
+    labels = ["Low", "Moderate", "High", "Extreme"]
+    values = [counts[label] for label in labels]
+    colors = [COLORS["low"], COLORS["moderate"], COLORS["high"], COLORS["extreme"]]
+
+    total = sum(values)
+    at_risk = summary["at_risk_count"]
 
     fig = go.Figure(
         go.Pie(
-            values=[pct, 100 - pct],
+            labels=labels,
+            values=values,
             hole=0.74,
-            marker=dict(colors=[COLORS["teal"], "#EFEDE7"], line=dict(width=0)),
+            marker=dict(colors=colors, line=dict(width=0)),
             textinfo="none",
             sort=False,
             direction="clockwise",
-            hoverinfo="skip",
+            hovertemplate="%{label}: %{value} cells<extra></extra>",
         )
     )
     fig.update_layout(
@@ -171,7 +216,10 @@ def render_containment_donut(data: Dict) -> None:
             height=230,
             annotations=[
                 dict(
-                    text=f"<b>{pct}%</b><br><span style='font-size:11px;color:{COLORS['text_muted']}'>contained</span>",
+                    text=(
+                        f"<b>{total}</b><br>"
+                        f"<span style='font-size:11px;color:{COLORS['text_muted']}'>cells</span>"
+                    ),
                     x=0.5,
                     y=0.5,
                     showarrow=False,
@@ -181,13 +229,6 @@ def render_containment_donut(data: Dict) -> None:
         )
     )
 
-    st.markdown(
-        "<div class='chart-title'>Containment Progress</div>", unsafe_allow_html=True
-    )
-    st.markdown(
-        "<div class='chart-sub'>Primary cluster &middot; updates with region</div>",
-        unsafe_allow_html=True,
-    )
     col1, col2 = st.columns([1.1, 1])
     with col1:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
@@ -195,9 +236,10 @@ def render_containment_donut(data: Dict) -> None:
         st.markdown(
             f"""
             <div class="donut-facts" style="margin-top:26px;">
-              Est. time remaining: <b>{data["est_hours_to_containment"]}h</b><br>
-              Model confidence: <b>{data["confidence_pct"]}%</b><br>
-              Growth rate: <b>+{data["growth_rate_km2_hr"]} km&sup2;/hr</b>
+              Cells flagged at risk: <b>{at_risk}</b><br>
+              Peak probability: <b>{summary["max_probability"]:.1%}</b><br>
+              Peak FFDI: <b>{summary["max_ffdi"]:.1f}</b><br>
+              Peak KBDI: <b>{summary["max_kbdi"]:.1f}</b>
             </div>
             """,
             unsafe_allow_html=True,
@@ -249,16 +291,20 @@ def render_factor_weights() -> None:
 # ----------------------------------------------------------------------------
 # LAYOUT: put all four in a 2x2 grid
 # ----------------------------------------------------------------------------
-def render_insights_section(data: Dict) -> None:
-    """Render the full 'Insights' section: a 2x2 grid of the four charts
-    above. Call this once from app.py with the currently selected region's
-    data dict."""
+def render_insights_section(trend: "pd.DataFrame", summary: Dict) -> None:
+    """
+    Renders the full 'Insights' section: a 2x2 grid of charts.
+
+    Args:
+        trend: per-day aggregates from utils.regions.build_daily_trend().
+        summary: region summary from utils.regions.summarise_region().
+    """
     st.markdown("## Insights")
 
     row1_col1, row1_col2 = st.columns(2)
     with row1_col1:
         with st.container(border=True):
-            render_risk_trend(data)
+            render_risk_trend(trend)
     with row1_col2:
         with st.container(border=True):
             render_historical_incidents()
@@ -266,7 +312,7 @@ def render_insights_section(data: Dict) -> None:
     row2_col1, row2_col2 = st.columns(2)
     with row2_col1:
         with st.container(border=True):
-            render_containment_donut(data)
+            render_risk_distribution(summary)
     with row2_col2:
         with st.container(border=True):
             render_factor_weights()
