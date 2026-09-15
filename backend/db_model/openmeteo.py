@@ -16,41 +16,31 @@ class OpenMeteo(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     
-    # Geographic coordinates
-    latitude = Column(Float, nullable=False, index=True)
-    longitude = Column(Float, nullable=False, index=True)
+    # Grid cell coordinates (0.5-degree grid, see pipeline grid-rounding convention)
+    lat_round = Column(Float, nullable=False, index=True)
+    lon_round = Column(Float, nullable=False, index=True)
     
     # Temporal information
     datetime_utc = Column(TIMESTAMP, nullable=False, index=True)
     fetched_at = Column(TIMESTAMP, default=datetime.now, nullable=False)
     
-    # Temperature measurements
+    # Weather variables (matches HOURLY_VARS in fetch_openmeteo_live.py)
     temperature_2m = Column(Float, nullable=False)
-    
-    # Humidity
     relative_humidity_2m = Column(Float, nullable=False)
-    
-    # Wind conditions
     wind_speed_10m = Column(Float, nullable=False)
     wind_direction_10m = Column(Float, nullable=False)
-    wind_gusts_10m = Column(Float, nullable=False)
-    
-    # Precipitation
     precipitation = Column(Float, nullable=False)
-    
-    # Soil conditions
+    wind_gusts_10m = Column(Float, nullable=False)
     soil_moisture_0_to_7cm = Column(Float, nullable=False)
+    cape = Column(Float, nullable=False)
+    vapour_pressure_deficit = Column(Float, nullable=False)
+    et0_fao_evapotranspiration = Column(Float, nullable=False)
     
-    # Atmospheric parameters
-    cape = Column(Float, nullable=False)  # Convective Available Potential Energy
-    vapour_pressure_deficit = Column(Float, nullable=False)  # VPD for plant transpiration
-    et0_fao_evapotranspiration = Column(Float, nullable=False)  # Reference evapotranspiration
-
-    # Composite indexes for efficient spatial-temporal queries
     __table_args__ = (
-        Index('idx_om_location', 'latitude', 'longitude'),
-        Index('idx_om_datetime_utc', 'datetime_utc'),
-        Index('idx_om_location_datetime', 'latitude', 'longitude', 'datetime_utc'),
-        Index('idx_om_fetched_at', 'fetched_at'),
-        UniqueConstraint('latitude', 'longitude', 'datetime_utc', name='uq_om_weather_observation'),
+        Index("idx_wl_grid_cell", "lat_round", "lon_round"),
+        Index("idx_wl_datetime_utc", "datetime_utc"),
+        Index("idx_wl_grid_cell_datetime", "lat_round", "lon_round", "datetime_utc"),
+        UniqueConstraint(
+            "lat_round", "lon_round", "datetime_utc", name="uq_wl_weather_observation"
+        ),
     )

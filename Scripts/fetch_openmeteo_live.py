@@ -35,6 +35,7 @@ Before running:
 """
 
 import os
+import sys
 import time
 import threading
 from collections import deque
@@ -45,16 +46,26 @@ import pandas as pd
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
-from sqlalchemy import create_engine, delete
 
-# from backend.db_model.base import Base
-# from backend.db_model.weather_live import WeatherLive
+# Script lives in Scripts/, so the repo root has to be on the path before
+# `backend` can be imported.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.api.weather_live import save_weather_live
+from backend.database import engine
+from backend.db_model.base import Base
+from backend.db_model.weather_live import WeatherLive
 
 # ---------- CONFIG ----------
-OUTPUT_CSV_PATH = "data/live_weather_grid.csv"
-GRID_POINTS_CSV_PATH = "data/australia_grid_points.csv"
-PROGRESS_LOG_PATH = "data/live_weather_grid_progress.log"
-DB_URL = "sqlite:///data/wildfire_db.db"
+# Absolute paths, so the script behaves the same whether it is run from the
+# repo root or from inside Scripts/.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(REPO_ROOT, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+OUTPUT_CSV_PATH = os.path.join(DATA_DIR, "live_weather_grid.csv")
+GRID_POINTS_CSV_PATH = os.path.join(DATA_DIR, "australia_grid_points.csv")
+PROGRESS_LOG_PATH = os.path.join(DATA_DIR, "live_weather_grid_progress.log")
 FORECAST_DAYS = 7
 
 AUS_LAT_MIN, AUS_LAT_MAX = -44, -10
@@ -85,12 +96,12 @@ cache_session = requests_cache.CachedSession(".cache", expire_after=900)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
 
-# engine = create_engine(DB_URL)
-# Base.metadata.create_all(engine)
+# Uses the shared engine from backend.database, so the fetcher writes to the
+# same wildfire_db.db the prediction API reads from.
+Base.metadata.create_all(engine)
 
 csv_lock = threading.Lock()
 log_lock = threading.Lock()
-db_lock = threading.Lock()
 
 
 class RateLimiter:
@@ -236,16 +247,11 @@ def append_to_output_csv(df):
         df.to_csv(OUTPUT_CSV_PATH, mode="a", header=not file_exists, index=False)
 
 
-def save_point_to_db(forecast_df, lat, lon):
-    with db_lock:
-        with engine.begin() as conn:
-            conn.execute(
-                delete(WeatherLive).where(
-                    WeatherLive.lat_round == lat,
-                    WeatherLive.lon_round == lon,
-                )
-            )
-        forecast_df.to_sql(WeatherLive.__tablename__, engine, if_exists="append", index=False)
+def save_point_to_db(forecast_df):
+    """Delegates to the backend DB layer, which handles the delete-then-insert
+    (a re-fetch supersedes the previous forecast for that cell) and its own
+    write lock."""
+    return save_weather_live(forecast_df)
 
 
 def fetch_and_save_point(lat, lon):
@@ -254,7 +260,9 @@ def fetch_and_save_point(lat, lon):
     try:
         forecast_df = fetch_forecast(lat, lon)
         append_to_output_csv(forecast_df)
-        # save_point_to_db(forecast_df, lat, lon)
+        save_point_to_db(forecast_df)
+        # Marked complete only after BOTH writes succeed -- otherwise a DB
+        # failure would be logged as done and skipped on the next run.
         mark_point_complete(point_key(lat, lon))
         return (lat, lon, True, None)
     except Exception as e:
