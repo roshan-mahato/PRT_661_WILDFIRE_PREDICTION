@@ -1,0 +1,14 @@
+volumes:
+    open-meteo-data:
+
+services:
+    open-meteo:
+        image: ghcr.io/open-meteo/open-meteo
+        container_name: open-meteo
+        volumes:
+            - open-meteo-data:/app/data
+        environment:
+            REMOTE_DATA_DIRECTORY: https://openmeteo.s3.amazonaws.com/data/
+        ports:
+            - '127.0.0.1:8080:8080'
+        restart: always
