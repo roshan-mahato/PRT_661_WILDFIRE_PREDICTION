@@ -9,7 +9,7 @@ import streamlit as st
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 
-from utils.regions import ffdi_band, get_region_view, latest_day_only
+from utils.regions import ffdi_band, get_region_view
 from utils.theme import COLORS, SEVERITY_STYLE
 
 # Heat gradient reuses the severity palette so the map agrees with the cards.
@@ -31,7 +31,10 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
     Renders the Folium map (80%) and the region threat summary (20%).
 
     Args:
-        predictions: prediction rows for this region (all forecast days).
+        predictions: prediction rows for this region, already narrowed to the
+                     forecast day chosen in the day strip. One row per cell --
+                     passing several days would stack markers on the same
+                     coordinates.
         region: selected region name.
         summary: output of utils.regions.summarise_region().
     """
@@ -57,9 +60,7 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
             attr=attr,
         )
 
-        # Only the latest forecast day is mapped -- plotting all 7 days would
-        # stack several markers on the same coordinates.
-        day = latest_day_only(predictions)
+        day = predictions
 
         if not day.empty:
             heat_data = [

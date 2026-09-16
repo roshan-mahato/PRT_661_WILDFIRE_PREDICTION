@@ -1,13 +1,18 @@
 """
 ================================================================================
-build_labeled_dataset.py  —  fixed labelling + negative sampling
+build_labeled_dataset.py  —  one labelled row per (grid cell, day)
 ================================================================================
-Builds the labelled one-row-per-(grid cell, day) dataset used to train the
-fire-occurrence model. Replaces `build_labeled_dataset()` from
-wildfire_data_pipeline_full.ipynb (Section 3).
+Builds the dataset used to train the fire-occurrence model. Replaces
+`build_labeled_dataset()` from wildfire_data_pipeline_full.ipynb (Section 3).
 
-WHY THIS REPLACEMENT EXISTS
----------------------------
+This script emits EVERY cell-day in the observed window with its label and
+features. It does no negative sampling and no buffering: those are training
+decisions, applied to the TRAIN split only by retrain_fire_model.py, so that
+the validation and test splits keep the natural class balance. Calibration
+and the decision threshold are only meaningful against that natural rate.
+
+WHY THE LABELLING WAS REBUILT (kept from the previous version)
+--------------------------------------------------------------
 The original version built the two classes in different ways:
 
   * POSITIVES  merged each FIRMS detection to weather on
@@ -27,24 +32,31 @@ Measured, with fire dates generated RANDOMLY and independently of weather
     original pipeline   ROC-AUC 1.0000   <- perfect skill from pure noise
     this version        ROC-AUC 0.4931   <- chance, as it should be
 
-    et0 by class, original:  label 0  std 0.0027 |  label 1  std 0.0279
-    et0 by class, fixed:     label 0  std 0.0027 |  label 1  std 0.0027
-
-The ten-fold variance gap is the fingerprint: averaging 24 hours collapses
-variance, averaging 1 hour does not.
-
-THE FIX
--------
-Build ONE continuous daily weather series first, then label it by lookup.
+The fix: build ONE daily weather series first, then label it by lookup.
 `acq_time` is discarded entirely -- it is detection metadata, not weather.
-Both classes then come from identical 24-hour aggregation and the artefact
-cannot exist.
+
+WHY THE KBDI SERIES COMES FROM A SEPARATE FILE
+----------------------------------------------
+The hourly weather CSV holds 14-day windows around fire detections, not a
+continuous record (median 33% of days present per cell, median longest gap
+~200 days). Every feature but one is a same-day snapshot, so that is fine.
+KBDI / Drought Factor are a recursion over consecutive days, and the
+recursion treats a gap as that many rain-free days, so on the gappy series
+the drought values the model learned from were badly inflated. The
+recursion is therefore run over a continuous daily temperature/rain series
+(Scripts/fetch_kbdi_history.py) and joined back by (cell, day).
+
+Rows are restricted to the FIRMS archive's date range. Outside it a day
+with no detection is unobserved, not fire-free, and would be a false
+negative.
 
 USAGE
 -----
+    uv run python Scripts/fetch_kbdi_history.py            # once; resumable
     uv run python Scripts/build_labeled_dataset.py \
         --firms data/fire_archive_SV-C2_792465.csv \
         --weather data/all_weather_data.csv \
+        --kbdi-weather data/kbdi_weather_continuous.csv \
         --output data/final.csv
 
 Then train on the result:
@@ -63,17 +75,15 @@ import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from prediction_engine import (
-    KBDI_SPINUP_DAYS, MEAN_ANNUAL_RAINFALL_MM, WEATHER_COLS,
+    KBDI_SPINUP_DAYS, WEATHER_COLS,
     compute_emc, compute_ffdi, compute_ros, kbdi_df_step,
 )
 
 GRID_SIZE = 0.5
 CONFIDENCE_TOKEEP = ["n", "h"]
 TYPE_TOKEEP = [0]
-BUFFER_DAYS = 3          # exclude +/- N days around each fire date
-NEG_PER_POS = 1
-NEG_SAMPLE_SEED = 42
 MAX_POSITIVE_RATE_PER_CELL = 0.80
+NO_FIRE_SENTINEL = 9999   # days_to_nearest_fire for a cell with no detections
 
 
 def round_to_grid(v, grid=GRID_SIZE):
@@ -81,15 +91,15 @@ def round_to_grid(v, grid=GRID_SIZE):
 
 
 # ==============================================================================
-# Step 1: continuous daily weather series (the ONLY source of feature rows)
+# Step 1: daily weather series from the hourly CSV (snapshot features)
 # ==============================================================================
 def build_daily_weather_series(weather_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Collapses hourly weather to one row per (cell, day) for EVERY day.
+    Collapses hourly weather to one row per (cell, day).
 
     precipitation is SUMMED (it accumulates); every other variable is a
-    snapshot reading and is averaged. This is the single source of feature
-    rows for both classes -- that is the whole point of the fix.
+    snapshot reading and is averaged. Both classes come from this one table,
+    so they are aggregated identically -- that is the whole point.
     """
     w = weather_df.copy()
     w["acq_date"] = pd.to_datetime(w["datetime_utc"]).dt.tz_localize(None).dt.floor("D")
@@ -102,23 +112,18 @@ def build_daily_weather_series(weather_df: pd.DataFrame) -> pd.DataFrame:
         .sort_values(["lat_round", "lon_round", "acq_date"])
         .reset_index(drop=True)
     )
-
-    gaps = daily.groupby(["lat_round", "lon_round"])["acq_date"].diff().dt.days.dropna()
-    contiguous = (gaps == 1).mean() * 100 if len(gaps) else 100.0
     print(f"Daily weather series: {len(daily):,} cell-days across "
-          f"{daily.groupby(['lat_round','lon_round']).ngroups:,} cells "
-          f"({contiguous:.1f}% consecutive)")
-    if contiguous < 95:
-        print("  WARNING: notable gaps -- KBDI/Drought Factor accuracy is reduced there.")
+          f"{daily.groupby(['lat_round','lon_round']).ngroups:,} cells")
     return daily
 
 
 # ==============================================================================
-# Step 2: fire detections -> a set of (cell, date) keys
+# Step 2: fire detections -> (cell, date) keys and the observed window
 # ==============================================================================
-def build_fire_keys(firms_df: pd.DataFrame) -> set:
+def build_fire_keys(firms_df: pd.DataFrame) -> tuple:
     """
-    Reduces FIRMS detections to the set of (cell, date) pairs that burned.
+    Reduces FIRMS detections to the set of (cell, date) pairs that burned,
+    plus the first and last detection dates (the observed window).
 
     `acq_time` is deliberately NOT used. Keeping it was what tied positives
     to a single overpass hour. A cell-day either had a detection or it did
@@ -140,38 +145,33 @@ def build_fire_keys(firms_df: pd.DataFrame) -> set:
 
     f["acq_date"] = pd.to_datetime(f["acq_date"]).dt.floor("D")
     keys = set(zip(f["lat_round"].round(3), f["lon_round"].round(3), f["acq_date"]))
-    print(f"FIRMS: {n_start:,} detections -> {len(keys):,} unique (cell, date) fire pairs")
-    return keys
+    start, end = f["acq_date"].min(), f["acq_date"].max()
+    print(f"FIRMS: {n_start:,} detections -> {len(keys):,} unique (cell, date) fire pairs, "
+          f"{start.date()} to {end.date()}")
+    return keys, start, end
 
 
 # ==============================================================================
-# Step 3: label the series, then sample negatives
+# Step 3: label every cell-day
 # ==============================================================================
-def label_and_sample(daily: pd.DataFrame, fire_keys: set,
-                     neg_per_pos: float = NEG_PER_POS,
-                     buffer_days: int = BUFFER_DAYS,
-                     max_pos_rate: float = MAX_POSITIVE_RATE_PER_CELL,
-                     seed: int = NEG_SAMPLE_SEED) -> pd.DataFrame:
+def label_all(daily: pd.DataFrame, fire_keys: set,
+              max_pos_rate: float = MAX_POSITIVE_RATE_PER_CELL) -> pd.DataFrame:
     """
-    Labels each cell-day by lookup, then samples negatives from the same
-    table. Both classes are rows of `daily`, so they are structurally
-    identical and differ only in their label.
+    Labels each cell-day by lookup and adds `days_to_nearest_fire`.
 
-    Two guards:
-      * days within +/- buffer_days of a fire are excluded from the negative
-        pool -- conditions then are near-identical to the fire day itself,
-        so those rows would teach the model contradictions.
-      * cells whose positive rate exceeds max_pos_rate are dropped. In such
-        cells almost every day burned, so the model can score well by
-        memorising lat/lon instead of reading the weather.
+    `days_to_nearest_fire` is derived from the label and exists only so the
+    training script can drop near-fire negatives from the TRAIN split. It
+    must never be used as a model feature.
+
+    Cells whose positive rate exceeds max_pos_rate are dropped: almost every
+    day burned there, so a model can score well by memorising lat/lon
+    instead of reading the weather.
     """
-    rng = np.random.default_rng(seed)
     d = daily.copy()
     d["acq_date"] = pd.to_datetime(d["acq_date"])
 
     keys = list(zip(d["lat_round"].round(3), d["lon_round"].round(3), d["acq_date"]))
     d["label"] = np.fromiter((k in fire_keys for k in keys), dtype=int, count=len(d))
-    print(f"Labelled: {len(d):,} cell-days | fire rate {d['label'].mean():.1%}")
 
     rate = d.groupby(["lat_round", "lon_round"])["label"].mean()
     dominated = rate[rate > max_pos_rate].index
@@ -182,53 +182,54 @@ def label_and_sample(daily: pd.DataFrame, fire_keys: set,
         print(f"Dropped {len(dominated):,} cell(s) with >{max_pos_rate:.0%} positive rate "
               f"({before - len(d):,} rows) -- they invite location memorisation.")
 
-    pos = d[d["label"] == 1]
-    if pos.empty:
-        raise SystemExit("No positive rows after labelling -- check the grid rounding and dates.")
+    nearest = np.full(len(d), NO_FIRE_SENTINEL, dtype=int)
+    for _, idx in d.groupby(["lat_round", "lon_round"]).indices.items():
+        days = d["acq_date"].values[idx].astype("datetime64[D]").astype(int)
+        fires = np.sort(days[d["label"].values[idx] == 1])
+        if len(fires) == 0:
+            continue
+        pos = np.searchsorted(fires, days)
+        left = np.abs(days - fires[np.clip(pos - 1, 0, len(fires) - 1)])
+        right = np.abs(fires[np.clip(pos, 0, len(fires) - 1)] - days)
+        nearest[idx] = np.minimum(left, right)
+    d["days_to_nearest_fire"] = nearest
 
-    excluded = set()
-    for a, b, c in zip(pos["lat_round"].round(3), pos["lon_round"].round(3), pos["acq_date"]):
-        for off in range(-buffer_days, buffer_days + 1):
-            excluded.add((a, b, c + pd.Timedelta(days=off)))
-
-    neg_all = d[d["label"] == 0]
-    nkeys = list(zip(neg_all["lat_round"].round(3), neg_all["lon_round"].round(3),
-                     neg_all["acq_date"]))
-    ok = np.fromiter((k not in excluded for k in nkeys), dtype=bool, count=len(nkeys))
-    pool = neg_all[ok]
-    print(f"Negative pool: {len(pool):,} (excluded {len(neg_all) - len(pool):,} within "
-          f"+/-{buffer_days} days of a fire)")
-
-    n_target = int(neg_per_pos * len(pos))
-    if n_target > len(pool):
-        print(f"  Only {len(pool):,} negatives available for a target of {n_target:,}.")
-        n_target = len(pool)
-    neg = pool.iloc[rng.choice(len(pool), size=n_target, replace=False)]
-
-    out = pd.concat([pos, neg], ignore_index=True)
-    out = out.sort_values(["lat_round", "lon_round", "acq_date"]).reset_index(drop=True)
-    print(f"Final: {len(out):,} rows ({int(out['label'].sum()):,} fire, "
-          f"{int((out['label'] == 0).sum()):,} no-fire | fire rate {out['label'].mean():.1%})")
-    return out
+    print(f"Labelled: {len(d):,} cell-days | fire rate {d['label'].mean():.1%} "
+          f"({int(d['label'].sum()):,} fire, {int((d['label'] == 0).sum()):,} no-fire)")
+    return d
 
 
 # ==============================================================================
 # Step 4: drought indices over the CONTINUOUS series, then join
 # ==============================================================================
-def compute_drought_indices(daily: pd.DataFrame) -> pd.DataFrame:
+def load_kbdi_weather(path: str) -> pd.DataFrame:
+    k = pd.read_csv(path)
+    k["acq_date"] = pd.to_datetime(k["acq_date"])
+    k = k.sort_values(["lat_round", "lon_round", "acq_date"]).reset_index(drop=True)
+    gaps = k.groupby(["lat_round", "lon_round"])["acq_date"].diff().dt.days.dropna()
+    contiguous = (gaps == 1).mean() * 100 if len(gaps) else 100.0
+    print(f"KBDI weather series: {len(k):,} cell-days across "
+          f"{k.groupby(['lat_round','lon_round']).ngroups:,} cells "
+          f"({contiguous:.1f}% consecutive)")
+    if contiguous < 99.9:
+        raise SystemExit("The KBDI weather series has gaps -- re-run fetch_kbdi_history.py.")
+    return k
+
+
+def compute_drought_indices(kbdi_daily: pd.DataFrame) -> pd.DataFrame:
     """
-    Runs the KBDI/Drought Factor recursion per cell over the full continuous
-    series, not over the sampled rows. Running it on a sparse sample inflates
-    KBDI badly, because each step would span many real days.
+    Runs the KBDI/Drought Factor recursion per cell over the continuous
+    series. Running it on a sparse series inflates KBDI badly, because each
+    step would span many real days.
     """
     out = []
-    for (lat, lon), g in daily.groupby(["lat_round", "lon_round"], sort=False):
+    for (lat, lon), g in kbdi_daily.groupby(["lat_round", "lon_round"], sort=False):
         g = g.sort_values("acq_date").reset_index(drop=True)
         state = None
         recs = []
         for row in g.itertuples(index=False):
             res, state = kbdi_df_step(state, row.acq_date, row.temperature_2m,
-                                      getattr(row, "precipitation", 0.0) or 0.0)
+                                      row.precipitation if pd.notna(row.precipitation) else 0.0)
             recs.append(res)
         r = pd.DataFrame(recs)
         r["lat_round"], r["lon_round"], r["acq_date"] = lat, lon, g["acq_date"].values
@@ -244,8 +245,17 @@ def engineer_features(labeled: pd.DataFrame, drought: pd.DataFrame) -> pd.DataFr
     df = labeled.merge(drought, on=["lat_round", "lon_round", "acq_date"], how="left")
     unmatched = int(df["kbdi"].isna().sum())
     if unmatched:
-        print(f"  {unmatched:,} rows had no drought index -- dropping.")
+        print(f"  {unmatched:,} rows had no drought index (cell missing from the "
+              f"continuous series) -- dropping.")
         df = df[df["kbdi"].notna()].reset_index(drop=True)
+
+    # The recursion's first KBDI_SPINUP_DAYS are a cold-start estimate; the
+    # live pipeline never serves such rows now that its state is warm.
+    spin = df["kbdi_spinup_flag"].astype(bool)
+    if spin.any():
+        print(f"  {int(spin.sum()):,} rows in KBDI spin-up (first {KBDI_SPINUP_DAYS} days "
+              f"of the series) -- dropping.")
+        df = df[~spin].reset_index(drop=True)
 
     df["emc"] = compute_emc(df["relative_humidity_2m"].to_numpy(float),
                             df["temperature_2m"].to_numpy(float))
@@ -257,10 +267,7 @@ def engineer_features(labeled: pd.DataFrame, drought: pd.DataFrame) -> pd.DataFr
     month = pd.to_datetime(df["acq_date"]).dt.month
     df["month_sin"] = np.sin(2 * np.pi * month / 12)
     df["month_cos"] = np.cos(2 * np.pi * month / 12)
-
-    n_spin = int(df["kbdi_spinup_flag"].sum())
-    print(f"Features built. {n_spin:,} rows ({100*n_spin/max(len(df),1):.1f}%) in KBDI spin-up "
-          f"(first {KBDI_SPINUP_DAYS} days of a cell).")
+    print(f"Features built: {len(df):,} rows.")
     return df
 
 
@@ -299,12 +306,13 @@ def check_class_symmetry(df: pd.DataFrame) -> bool:
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0])
     parser.add_argument("--firms", required=True, help="FIRMS detections CSV")
-    parser.add_argument("--weather", required=True, help="Hourly weather CSV")
+    parser.add_argument("--weather", required=True, help="Hourly weather CSV (snapshot features)")
+    parser.add_argument("--kbdi-weather", default="data/kbdi_weather_continuous.csv",
+                        help="Continuous daily temp/rain series from fetch_kbdi_history.py")
     parser.add_argument("--output", default="data/final.csv", help="Output CSV")
-    parser.add_argument("--neg-per-pos", type=float, default=NEG_PER_POS)
     args = parser.parse_args()
 
-    for p in (args.firms, args.weather):
+    for p in (args.firms, args.weather, args.kbdi_weather):
         if not os.path.exists(p):
             raise SystemExit(f"File not found: {p}")
 
@@ -316,9 +324,17 @@ def main():
     print(f"Loaded {len(weather):,} weather rows, {len(firms):,} FIRMS rows")
 
     daily = build_daily_weather_series(weather)
-    fire_keys = build_fire_keys(firms)
-    labeled = label_and_sample(daily, fire_keys, neg_per_pos=args.neg_per_pos)
-    drought = compute_drought_indices(daily)
+    fire_keys, firms_start, firms_end = build_fire_keys(firms)
+
+    before = len(daily)
+    daily = daily[(daily["acq_date"] >= firms_start) & (daily["acq_date"] <= firms_end)]
+    daily = daily.reset_index(drop=True)
+    if len(daily) < before:
+        print(f"Dropped {before - len(daily):,} cell-days outside the FIRMS window "
+              f"(unobserved, not fire-free).")
+
+    labeled = label_all(daily, fire_keys)
+    drought = compute_drought_indices(load_kbdi_weather(args.kbdi_weather))
     final = engineer_features(labeled, drought)
 
     passed = check_class_symmetry(final)

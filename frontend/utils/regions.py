@@ -131,6 +131,33 @@ def latest_day_only(df: pd.DataFrame) -> pd.DataFrame:
     return df[pd.to_datetime(df["acq_date"]) == latest].reset_index(drop=True)
 
 
+def day_options(df: pd.DataFrame) -> list:
+    """
+    One entry per forecast day, oldest first, for the day selector strip.
+
+    Each entry carries the headline figures a tile shows, so the strip can be
+    drawn without re-grouping the frame once per day.
+    """
+    if df.empty or "acq_date" not in df.columns:
+        return []
+
+    out = []
+    for day, group in df.groupby(pd.to_datetime(df["acq_date"]).dt.date, sort=True):
+        counts = {level: int((group["risk_level"] == level).sum()) for level in RISK_ORDER}
+        peak = next((level for level in reversed(RISK_ORDER) if counts[level] > 0), "Low")
+        out.append(
+            {
+                "date": day,
+                "peak_level": peak,
+                "peak_probability": float(group["fire_probability"].max()),
+                "at_risk_count": int(group["fire_predicted"].sum()),
+                "cell_count": int(len(group)),
+                "max_ffdi": float(group["ffdi"].max()),
+            }
+        )
+    return out
+
+
 def summarise_region(df: pd.DataFrame, region: str) -> Dict[str, Any]:
     """
     Derives the headline figures for a region from its prediction rows.

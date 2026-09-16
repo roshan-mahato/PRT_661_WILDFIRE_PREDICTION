@@ -8,9 +8,11 @@ first, then run this:
     uv run streamlit run frontend/main.py
 """
 
+import pandas as pd
 import streamlit as st
 
 from components.charts import render_insights_section
+from components.day_strip import render_day_strip
 from components.headers import render_header
 from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
@@ -20,7 +22,12 @@ from utils.api_client import (
     fetch_stored_predictions,
     refresh_predictions,
 )
-from utils.regions import build_daily_trend, filter_by_region, summarise_region
+from utils.regions import (
+    build_daily_trend,
+    day_options,
+    filter_by_region,
+    summarise_region,
+)
 
 st.set_page_config(
     page_title="Wildfire Prediction Platform",
@@ -67,7 +74,18 @@ if predictions.empty and not load_error:
 # Region slice + derived figures
 # ---------------------------------------------------------------------------
 regional = filter_by_region(predictions, region)
-summary = summarise_region(regional, region)
+
+# The strip selects one day; the cards and map describe that day, while the
+# trend chart keeps the whole window so the shape of the forecast stays visible.
+selected_day = render_day_strip(day_options(regional))
+if selected_day is None:
+    day_regional = regional
+else:
+    day_regional = regional[
+        pd.to_datetime(regional["acq_date"]).dt.date == selected_day
+    ].reset_index(drop=True)
+
+summary = summarise_region(day_regional, region)
 trend = build_daily_trend(regional)
 
 if summary["has_data"]:
@@ -80,5 +98,5 @@ if summary["has_data"]:
 # Sections
 # ---------------------------------------------------------------------------
 render_insights_row(summary)
-render_map_with_insights(regional, region, summary)
+render_map_with_insights(day_regional, region, summary)
 render_insights_section(trend, summary)

@@ -29,6 +29,27 @@ FIX 2 — temporal train/validation/test split
     both leak-free and the way the system is actually used: predicting
     forward from history.
 
+FIX 3 — natural class balance in validation and test, then calibration
+    The dataset now contains every cell-day (build_labeled_dataset.py no
+    longer subsamples negatives). Fires cluster in the dry season, so when
+    negatives were subsampled globally a temporal cut produced a validation
+    split that was 86% fire and a test split that was 18% fire; a threshold
+    tuned on the first flagged nearly everything on the second, and the
+    probabilities themselves answered "fire or not, given a 50/50 world".
+    Negative sampling and the near-fire buffer are now applied to the TRAIN
+    split only. Validation and test keep the real rate, the model is
+    isotonic-calibrated on validation, and the reliability table reports
+    predicted against observed fire rate by bin -- the number that says
+    whether a "60%" means 60%. scale_pos_weight is gone for the same reason:
+    it re-imposed the 50/50 prior the calibration exists to remove.
+
+FIX 4 — near-fire buffer reduced to 1 day, train only
+    The previous +/-3-day exclusion removed ~55% of dry-season days from the
+    negative pool in the north, so the model never saw what "September but
+    no fire" looks like there and fell back on location and month. One day
+    still guards against detection-timing noise (a fire burning the day
+    before the satellite pass).
+
 EXPECT THE HEADLINE METRIC TO FALL. That is the point: the drop is the
 leakage the old setup was supplying. A lower honest number is worth more
 than a higher one you cannot defend.
@@ -36,7 +57,8 @@ than a higher one you cannot defend.
 USAGE
 -----
     uv run python Scripts/retrain_fire_model.py --input data/final.csv
-    uv run python Scripts/retrain_fire_model.py --input data/final.csv --keep-old-features
+    uv run python Scripts/retrain_fire_model.py --input data/final.csv --buffer-days 0
+    uv run python Scripts/retrain_fire_model.py --input data/final.csv --neg-per-pos 3
     uv run python Scripts/retrain_fire_model.py --input data/final.csv --no-save
 
 The saved bundle keeps the same shape the backend expects
@@ -82,12 +104,19 @@ DAYS_SINCE_RAIN_CAP = 180.0
 # FIX 2: fractions of the DATE RANGE (not of the rows) used for each split.
 TRAIN_FRAC, VAL_FRAC = 0.60, 0.20
 
-# Fields that exist only because a fire was detected. Using any of them as a
-# predictor would leak the label.
+# FIX 4: training negatives within this many days of a fire are dropped.
+BUFFER_DAYS = 1
+
+# Fields that exist only because a fire was detected, or are derived from
+# the label. Using any of them as a predictor would leak the label.
 FIRMS_ONLY_FIELDS = {
     "brightness", "bright_ti4", "bright_ti5", "frp", "confidence", "type",
     "satellite", "instrument", "scan", "track", "acq_time",
+    "label", "days_to_nearest_fire",
 }
+
+# Reliability table bins: predicted probability -> observed fire rate.
+CALIBRATION_BINS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
 
 # ==============================================================================
@@ -172,21 +201,56 @@ def temporal_split(df: pd.DataFrame, X: pd.DataFrame, y: pd.Series) -> dict:
 
     splits = {}
     for name, mask in [("train", train_mask), ("val", val_mask), ("test", test_mask)]:
-        splits[name] = (X[mask.values], y[mask.values], df.loc[mask.values, "acq_date"])
+        m = mask.values
+        splits[name] = (df.loc[m], X[m], y[m])
 
     print(f"\nTemporal split (train <= {train_end.date()} < val <= {val_end.date()} < test):")
     for name in ("train", "val", "test"):
-        Xs, ys, ds = splits[name]
+        ds, _, ys = splits[name]
         if len(ys) == 0:
             raise SystemExit(f"The '{name}' split is empty -- the date range is too short.")
         print(f"  {name:5s}: {len(ys):>7,} rows | fire rate {ys.mean():.2%} "
-              f"| {ds.min().date()} to {ds.max().date()}")
+              f"| {ds['acq_date'].min().date()} to {ds['acq_date'].max().date()}")
 
     for a, b in (("train", "val"), ("val", "test")):
-        if splits[a][2].max() >= splits[b][2].min():
+        if splits[a][0]["acq_date"].max() >= splits[b][0]["acq_date"].min():
             raise SystemExit(f"Temporal split overlap between {a} and {b}.")
     print("  No date overlap between splits.")
     return splits
+
+
+def prepare_train_split(df_train, X_train, y_train, buffer_days: int, neg_per_pos):
+    """
+    FIX 3/4: the only place negatives are dropped or sampled. Validation and
+    test are never touched, so they keep the real class balance.
+    """
+    keep = np.ones(len(y_train), dtype=bool)
+
+    if buffer_days > 0:
+        if "days_to_nearest_fire" not in df_train.columns:
+            raise SystemExit("Dataset has no 'days_to_nearest_fire' column -- rebuild it with "
+                             "the current build_labeled_dataset.py.")
+        near = df_train["days_to_nearest_fire"].values
+        buffered = (y_train.values == 0) & (near > 0) & (near <= buffer_days)
+        keep &= ~buffered
+        print(f"\nTrain buffer: dropped {int(buffered.sum()):,} negatives within "
+              f"{buffer_days} day(s) of a fire.")
+
+    if neg_per_pos is not None:
+        rng = np.random.default_rng(RANDOM_STATE)
+        pos_idx = np.flatnonzero(keep & (y_train.values == 1))
+        neg_idx = np.flatnonzero(keep & (y_train.values == 0))
+        n_target = min(int(neg_per_pos * len(pos_idx)), len(neg_idx))
+        chosen = rng.choice(neg_idx, size=n_target, replace=False)
+        keep = np.zeros(len(y_train), dtype=bool)
+        keep[pos_idx] = True
+        keep[chosen] = True
+        print(f"Train sampling: {len(pos_idx):,} fire + {n_target:,} no-fire "
+              f"({neg_per_pos}:1).")
+
+    X_out, y_out = X_train[keep], y_train[keep]
+    print(f"Train after preparation: {len(y_out):,} rows | fire rate {y_out.mean():.2%}")
+    return X_out, y_out
 
 
 # ==============================================================================
@@ -194,32 +258,52 @@ def temporal_split(df: pd.DataFrame, X: pd.DataFrame, y: pd.Series) -> dict:
 # ==============================================================================
 def train_model(X_train, y_train):
     """
-    LightGBM with scale_pos_weight, matching the existing setup so the only
-    things that change are the two fixes.
+    LightGBM with the existing hyperparameters. No scale_pos_weight: the
+    train split is already close to the real balance, and reweighting would
+    push the scores back towards the 50/50 prior calibration then has to undo.
     """
     import lightgbm as lgb
 
-    scale_pos_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)
-    print(f"\nTraining LightGBM (scale_pos_weight={scale_pos_weight:.4f})...")
+    print(f"\nTraining LightGBM on {len(y_train):,} rows...")
     model = lgb.LGBMClassifier(
         n_estimators=300, learning_rate=0.05, num_leaves=63,
-        min_child_samples=30, scale_pos_weight=scale_pos_weight,
-        random_state=RANDOM_STATE, n_jobs=-1, verbosity=-1,
+        min_child_samples=30, random_state=RANDOM_STATE, n_jobs=-1, verbosity=-1,
     )
     model.fit(X_train, y_train)
     return model
 
 
+def calibrate(model, X_val, y_val):
+    """
+    FIX 3: maps the model's scores onto observed fire frequency using the
+    validation split, which has the real class balance. Isotonic regression
+    is monotonic, so the ranking (ROC-AUC) is unchanged; only the meaning of
+    the number changes -- afterwards 0.6 means "cell-days scored like this
+    burned about 60% of the time".
+    """
+    from sklearn.calibration import CalibratedClassifierCV
+    from sklearn.frozen import FrozenEstimator
+
+    print("Calibrating on validation (isotonic)...")
+    calibrated = CalibratedClassifierCV(FrozenEstimator(model), method="isotonic")
+    calibrated.fit(X_val, y_val)
+    return calibrated
+
+
 def evaluate(model, X, y, threshold: float, label: str) -> dict:
     from sklearn.metrics import (
         accuracy_score, average_precision_score, balanced_accuracy_score,
-        confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score,
+        brier_score_loss, confusion_matrix, f1_score, precision_score,
+        recall_score, roc_auc_score,
     )
     proba = model.predict_proba(X)[:, 1]
     pred = (proba >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y, pred, labels=[0, 1]).ravel()
     return {
         "split": label, "threshold": round(float(threshold), 4),
+        "base_rate": round(float(y.mean()), 4),
+        "mean_predicted": round(float(proba.mean()), 4),
+        "brier": round(brier_score_loss(y, proba), 4),
         "accuracy": round(accuracy_score(y, pred), 4),
         "balanced_accuracy": round(balanced_accuracy_score(y, pred), 4),
         "precision_fire": round(precision_score(y, pred, zero_division=0), 4),
@@ -229,6 +313,26 @@ def evaluate(model, X, y, threshold: float, label: str) -> dict:
         "pr_auc": round(average_precision_score(y, proba), 4),
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     }
+
+
+def reliability_table(model, X, y, label: str) -> pd.DataFrame:
+    """
+    Predicted probability against observed fire rate, by bin. For a
+    calibrated model the two columns track each other; the old model put
+    almost every row in the top bins regardless of what actually burned.
+    """
+    proba = model.predict_proba(X)[:, 1]
+    bins = pd.cut(proba, CALIBRATION_BINS, include_lowest=True)
+    table = (pd.DataFrame({"bin": bins, "predicted": proba, "observed": y.values})
+             .groupby("bin", observed=True)
+             .agg(rows=("observed", "size"), predicted=("predicted", "mean"),
+                  observed=("observed", "mean"))
+             .reset_index())
+    table["bin"] = table["bin"].astype(str)
+    print(f"\nReliability -- {label} (base rate {y.mean():.1%}):")
+    print(table.to_string(index=False, formatters={
+        "predicted": "{:.3f}".format, "observed": "{:.3f}".format, "rows": "{:,}".format}))
+    return table
 
 
 def tune_threshold(model, X_val, y_val) -> float:
@@ -340,6 +444,10 @@ def main():
                         help="Where to write the model bundle")
     parser.add_argument("--keep-old-features", action="store_true",
                         help="Keep days_since_cell_start (for an A/B comparison only)")
+    parser.add_argument("--buffer-days", type=int, default=BUFFER_DAYS,
+                        help=f"Drop TRAIN negatives within N days of a fire (default {BUFFER_DAYS}; 0 = off)")
+    parser.add_argument("--neg-per-pos", type=float, default=None,
+                        help="Subsample TRAIN negatives to this ratio (default: keep all)")
     parser.add_argument("--no-save", action="store_true",
                         help="Train and report, but do not write the bundle")
     args = parser.parse_args()
@@ -354,11 +462,15 @@ def main():
     df = load_dataset(args.input)
     df, X, y = build_features(df, features)
     splits = temporal_split(df, X, y)
-    X_train, y_train, _ = splits["train"]
-    X_val, y_val, _ = splits["val"]
-    X_test, y_test, _ = splits["test"]
+    df_train, X_train, y_train = splits["train"]
+    _, X_val, y_val = splits["val"]
+    _, X_test, y_test = splits["test"]
 
-    model = train_model(X_train, y_train)
+    X_train, y_train = prepare_train_split(df_train, X_train, y_train,
+                                           args.buffer_days, args.neg_per_pos)
+
+    base_model = train_model(X_train, y_train)
+    model = calibrate(base_model, X_val, y_val)
     threshold = tune_threshold(model, X_val, y_val)
 
     rows = [
@@ -368,11 +480,16 @@ def main():
         evaluate(model, X_test, y_test, threshold, "TEST @tuned"),
     ]
     print("\n" + "=" * 78)
-    print("RESULTS (test = most recent period, never seen in training)")
+    print("RESULTS (calibrated; test = most recent period, never seen in training)")
     print("=" * 78)
     print(pd.DataFrame(rows).to_string(index=False))
 
-    report_importance(model, features)
+    reliability = {
+        "validation": reliability_table(model, X_val, y_val, "validation (calibration set)"),
+        "test": reliability_table(model, X_test, y_test, "TEST"),
+    }
+
+    report_importance(base_model, features)
     passed = sanity_check(model, features, threshold)
 
     if args.no_save:
@@ -381,7 +498,7 @@ def main():
 
     bundle = {
         "model": model,
-        "model_name": "LightGBM",
+        "model_name": "LightGBM (isotonic-calibrated)",
         "features": features,
         "scaler": None,
         "threshold_default": 0.50,
@@ -404,9 +521,15 @@ def main():
         "split": "temporal", "features": features,
         "dropped_features": [] if args.keep_old_features else DROPPED_FEATURES,
         "days_since_rain_cap": DAYS_SINCE_RAIN_CAP,
+        "calibration": "isotonic on validation",
+        "train_buffer_days": args.buffer_days,
+        "train_neg_per_pos": args.neg_per_pos,
         "threshold_f1_optimal": float(threshold),
-        "rows": {k: int(len(splits[k][1])) for k in splits},
-        "metrics": rows, "sanity_check_passed": bool(passed),
+        "rows": {"train_after_preparation": int(len(y_train)),
+                 **{k: int(len(splits[k][2])) for k in splits}},
+        "metrics": rows,
+        "reliability": {k: v.to_dict(orient="records") for k, v in reliability.items()},
+        "sanity_check_passed": bool(passed),
     }
     meta_path = os.path.splitext(args.output)[0] + "_metadata.json"
     with open(meta_path, "w") as f:
