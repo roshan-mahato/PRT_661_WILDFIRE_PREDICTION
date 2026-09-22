@@ -154,7 +154,7 @@ def build_fire_keys(firms_df: pd.DataFrame) -> tuple:
 # ==============================================================================
 # Step 3: label every cell-day
 # ==============================================================================
-def label_all(daily: pd.DataFrame, fire_keys: set,
+def label_all(daily: pd.DataFrame, fire_keys: set, window_days: int,
               max_pos_rate: float = MAX_POSITIVE_RATE_PER_CELL) -> pd.DataFrame:
     """
     Labels each cell-day by lookup and adds `days_to_nearest_fire`.
@@ -163,9 +163,12 @@ def label_all(daily: pd.DataFrame, fire_keys: set,
     training script can drop near-fire negatives from the TRAIN split. It
     must never be used as a model feature.
 
-    Cells whose positive rate exceeds max_pos_rate are dropped: almost every
-    day burned there, so a model can score well by memorising lat/lon
-    instead of reading the weather.
+    Cells that burned on more than max_pos_rate of ALL days in the observed
+    window are dropped: a model can score well there by memorising lat/lon
+    instead of reading the weather. The rate is taken over the whole window,
+    not over the days present in the weather CSV -- that file only observes
+    a cell during outbreaks, so its per-cell rate says nothing about how
+    often the cell burns.
     """
     d = daily.copy()
     d["acq_date"] = pd.to_datetime(d["acq_date"])
@@ -173,14 +176,19 @@ def label_all(daily: pd.DataFrame, fire_keys: set,
     keys = list(zip(d["lat_round"].round(3), d["lon_round"].round(3), d["acq_date"]))
     d["label"] = np.fromiter((k in fire_keys for k in keys), dtype=int, count=len(d))
 
-    rate = d.groupby(["lat_round", "lon_round"])["label"].mean()
-    dominated = rate[rate > max_pos_rate].index
-    if len(dominated):
-        before = len(d)
-        idx = pd.MultiIndex.from_arrays([d["lat_round"], d["lon_round"]])
-        d = d[~idx.isin(dominated)].reset_index(drop=True)
-        print(f"Dropped {len(dominated):,} cell(s) with >{max_pos_rate:.0%} positive rate "
-              f"({before - len(d):,} rows) -- they invite location memorisation.")
+    fires_per_cell = pd.Series(
+        [(lat, lon) for lat, lon, _ in fire_keys]
+    ).value_counts()
+    rate = fires_per_cell / window_days
+    dominated = set(rate[rate > max_pos_rate].index)
+    cells = pd.Series(list(zip(d["lat_round"].round(3), d["lon_round"].round(3))))
+    hit = cells.isin(dominated).values
+    if hit.any():
+        n_cells = cells[hit].nunique()
+        d = d[~hit].reset_index(drop=True)
+        print(f"Dropped {n_cells:,} cell(s) that burned on >{max_pos_rate:.0%} of all "
+              f"{window_days} days in the window ({int(hit.sum()):,} rows) -- "
+              f"they invite location memorisation.")
 
     nearest = np.full(len(d), NO_FIRE_SENTINEL, dtype=int)
     for _, idx in d.groupby(["lat_round", "lon_round"]).indices.items():
@@ -286,8 +294,12 @@ def check_class_symmetry(df: pd.DataFrame) -> bool:
     print("\n" + "=" * 74)
     print("CLASS SYMMETRY CHECK -- std ratio should be near 1 for every variable")
     print("=" * 74)
+    # Precipitation is a daily SUM with a hard floor at zero, and it genuinely
+    # rains less on fire days, so its spread differs between classes for
+    # physical reasons. Every other variable is a snapshot mean whose spread
+    # should not depend on the label.
     worst, worst_col = 1.0, None
-    for c in [c for c in WEATHER_COLS if c in df.columns]:
+    for c in [c for c in WEATHER_COLS if c in df.columns and c != "precipitation"]:
         s0 = df.loc[df.label == 0, c].std()
         s1 = df.loc[df.label == 1, c].std()
         ratio = max(s0, s1) / max(min(s0, s1), 1e-12)
@@ -333,7 +345,8 @@ def main():
         print(f"Dropped {before - len(daily):,} cell-days outside the FIRMS window "
               f"(unobserved, not fire-free).")
 
-    labeled = label_all(daily, fire_keys)
+    window_days = (firms_end - firms_start).days + 1
+    labeled = label_all(daily, fire_keys, window_days)
     drought = compute_drought_indices(load_kbdi_weather(args.kbdi_weather))
     final = engineer_features(labeled, drought)
 

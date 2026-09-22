@@ -368,7 +368,7 @@ def sanity_check(model, features: list, threshold: float) -> bool:
         relative_humidity_2m=55.0, vapour_pressure_deficit=1.2,
         rate_of_spread=0.10, ffdi=10.0, precipitation=0.0, month_cos=-0.9,
         days_since_rain=8.0, kbdi=60.0, drought_factor=5.0, month_sin=0.4,
-        lat_round=-33.25, lon_round=150.25,
+        lat_round=-33.5, lon_round=150.5,   # on the 0.5-degree grid (Blue Mountains, NSW)
     )
 
     def mk(**kw):

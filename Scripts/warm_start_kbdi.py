@@ -63,6 +63,9 @@ HISTORY_START = date(2024, 1, 1)
 KBDI_VARS = ["temperature_2m", "precipitation"]
 REQUEST_DELAY_SECONDS = 1.0
 MINUTE_LIMIT_RETRIES = 5
+# The client only applies its own timeout when it builds the session; with
+# the shared cached session passed in, an unanswered request waits forever.
+REQUEST_TIMEOUT_SECONDS = 90
 
 
 def fetch_kbdi_history(lat: float, lon: float, start: date, end: date) -> pd.DataFrame:
@@ -84,7 +87,9 @@ def fetch_kbdi_history(lat: float, lon: float, start: date, end: date) -> pd.Dat
     }
     for attempt in range(MINUTE_LIMIT_RETRIES + 1):
         try:
-            response = openmeteo.weather_api(ARCHIVE_URL, params=params)[0]
+            response = openmeteo.weather_api(
+                ARCHIVE_URL, params=params, timeout=REQUEST_TIMEOUT_SECONDS
+            )[0]
             break
         except Exception as exc:  # noqa: BLE001 - client wraps the HTTP error
             text = str(exc).lower()
