@@ -22,10 +22,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from utils.regions import RISK_ORDER
-from utils.theme import COLORS
+from utils.styles import html, section_header
+from utils.theme import COLORS, FONT_BODY
 
-PLOT_FONT = dict(family="Inter, sans-serif", color=COLORS["text_muted"], size=12)
+PLOT_FONT = dict(family=FONT_BODY, color=COLORS["text_muted"], size=12)
 GRID_COLOR = COLORS["border"]
+CHART_CONFIG = {"displayModeBar": False}
 
 
 def _base_layout(height: int = 280, **overrides) -> dict:
@@ -38,6 +40,11 @@ def _base_layout(height: int = 280, **overrides) -> dict:
         plot_bgcolor="rgba(0,0,0,0)",
         font=PLOT_FONT,
         showlegend=False,
+        hoverlabel=dict(
+            bgcolor=COLORS["surface"],
+            bordercolor=COLORS["border"],
+            font=dict(family=FONT_BODY, color=COLORS["text"], size=12),
+        ),
     )
     layout.update(overrides)
     return layout
@@ -64,6 +71,9 @@ def render_risk_trend(trend: "pd.DataFrame") -> None:
     days = [d.strftime("%a %d %b") for d in pd.to_datetime(trend["acq_date"])]
     mean_pct = (trend["mean_probability"] * 100).round(1)
     max_pct = (trend["max_probability"] * 100).round(1)
+    # A line needs two points; with a single day, larger markers keep the
+    # values visible instead of leaving two lonely dots.
+    marker_size = 8 if len(days) > 1 else 14
 
     fig = go.Figure()
     fig.add_trace(
@@ -72,9 +82,10 @@ def render_risk_trend(trend: "pd.DataFrame") -> None:
             y=max_pct,
             name="Peak cell",
             mode="lines+markers",
-            line=dict(color=COLORS["flame"], width=3),
+            line=dict(color=COLORS["flame"], width=2.5, shape="spline", smoothing=0.6),
+            marker=dict(size=marker_size, line=dict(color=COLORS["surface"], width=2)),
             fill="tozeroy",
-            fillcolor="rgba(242, 84, 91, 0.15)",
+            fillcolor="rgba(242, 84, 91, 0.12)",
             hovertemplate="%{x}: %{y:.1f}%<extra>Peak cell</extra>",
         )
     )
@@ -85,6 +96,7 @@ def render_risk_trend(trend: "pd.DataFrame") -> None:
             name="Regional mean",
             mode="lines+markers",
             line=dict(color=COLORS["text_muted"], width=1.6, dash="dash"),
+            marker=dict(size=marker_size - 2, line=dict(color=COLORS["surface"], width=2)),
             hovertemplate="%{x}: %{y:.1f}%<extra>Regional mean</extra>",
         )
     )
@@ -116,7 +128,7 @@ def render_risk_trend(trend: "pd.DataFrame") -> None:
         "<div class='chart-sub'>Predicted fire probability per forecast day</div>",
         unsafe_allow_html=True,
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
 
 
 # ----------------------------------------------------------------------------
@@ -211,7 +223,7 @@ def render_risk_outlook(predictions: pd.DataFrame) -> None:
             xaxis=dict(showgrid=False),
         )
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
 
 
 # ----------------------------------------------------------------------------
@@ -230,7 +242,7 @@ def render_risk_distribution(summary: Dict) -> None:
         "<div class='chart-title'>Risk Distribution</div>", unsafe_allow_html=True
     )
     st.markdown(
-        "<div class='chart-sub'>Grid cells by predicted risk level &middot; latest forecast day</div>",
+        "<div class='chart-sub'>Grid cells by predicted risk level &middot; selected forecast day</div>",
         unsafe_allow_html=True,
     )
 
@@ -251,7 +263,7 @@ def render_risk_distribution(summary: Dict) -> None:
             labels=labels,
             values=values,
             hole=0.74,
-            marker=dict(colors=colors, line=dict(width=0)),
+            marker=dict(colors=colors, line=dict(color=COLORS["surface"], width=2)),
             textinfo="none",
             sort=False,
             direction="clockwise",
@@ -278,18 +290,17 @@ def render_risk_distribution(summary: Dict) -> None:
 
     col1, col2 = st.columns([1.1, 1])
     with col1:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
     with col2:
-        st.markdown(
+        html(
             f"""
-            <div class="donut-facts" style="margin-top:26px;">
-              Cells flagged at risk: <b>{at_risk}</b><br>
-              Peak probability: <b>{summary["max_probability"]:.1%}</b><br>
-              Peak FFDI: <b>{summary["max_ffdi"]:.1f}</b><br>
-              Peak KBDI: <b>{summary["max_kbdi"]:.1f}</b>
+            <div class="donut-facts">
+              <div>Cells flagged at risk<b>{at_risk} of {total}</b></div>
+              <div>Peak probability<b>{summary["max_probability"]:.1%}</b></div>
+              <div>Peak FFDI<b>{summary["max_ffdi"]:.1f}</b></div>
+              <div>Peak KBDI<b>{summary["max_kbdi"]:.1f} / 203.2</b></div>
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
 
 
@@ -405,14 +416,14 @@ def render_factor_weights(
     fig.update_traces(cliponaxis=False)
     fig.update_layout(
         **_base_layout(
-            height=280,
-            margin=dict(l=8, r=16, t=8, b=16),
+            height=236,
+            margin=dict(l=8, r=16, t=4, b=8),
             xaxis=dict(range=[0, values.max() * 1.25], showgrid=False, visible=False),
             yaxis=dict(autorange="reversed"),
             bargap=0.35,
         )
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config=CHART_CONFIG)
 
 
 # ----------------------------------------------------------------------------
@@ -435,20 +446,24 @@ def render_insights_section(
         importance: per-feature importance from api_client.fetch_feature_importance().
         importance_error: error message to show if importance could not be fetched.
     """
-    st.markdown("## Insights")
+    section_header(
+        "Insights",
+        "How the forecast develops",
+        "Trends across the forecast window, and what the model bases its predictions on.",
+    )
 
-    row1_col1, row1_col2 = st.columns(2)
+    row1_col1, row1_col2 = st.columns(2, gap="medium")
     with row1_col1:
-        with st.container(border=True):
+        with st.container(key="card-trend"):
             render_risk_trend(trend)
     with row1_col2:
-        with st.container(border=True):
+        with st.container(key="card-outlook"):
             render_risk_outlook(predictions)
 
-    row2_col1, row2_col2 = st.columns(2)
+    row2_col1, row2_col2 = st.columns(2, gap="medium")
     with row2_col1:
-        with st.container(border=True):
+        with st.container(key="card-distribution"):
             render_risk_distribution(summary)
     with row2_col2:
-        with st.container(border=True):
+        with st.container(key="card-factors"):
             render_factor_weights(importance, importance_error)

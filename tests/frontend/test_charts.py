@@ -134,8 +134,8 @@ def test_risk_distribution_matches_summary(st_calls, predictions):
     assert list(pie.values) == [1, 2, 1, 2]
     assert "<b>6</b>" in fig.layout.annotations[0].text
     facts = st_calls["markdown"][-1]
-    assert "Cells flagged at risk: <b>3</b>" in facts
-    assert "Peak probability: <b>90.0%</b>" in facts
+    assert "Cells flagged at risk<b>3 of 6</b>" in facts
+    assert "Peak probability<b>90.0%</b>" in facts
 
 
 def test_risk_distribution_no_data(st_calls, empty_predictions):

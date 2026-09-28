@@ -1,6 +1,15 @@
 [theme]
-primaryColor="#FF4B4B"
-backgroundColor="#FFFFFF"
-secondaryBackgroundColor="#F0F2F6"
-textColor="#000000"
-font="sans serif"
+base = "light"
+primaryColor = "#D9480F"
+backgroundColor = "#F6F4F0"
+secondaryBackgroundColor = "#EFEBE4"
+textColor = "#1C1917"
+borderColor = "#E4DFD6"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Space Grotesk:https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap"
+baseRadius = "10px"
+showWidgetBorder = true
+
+[client]
+# Hides the "Deploy" button and developer menu -- this is a public dashboard.
+toolbarMode = "viewer"

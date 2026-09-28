@@ -74,8 +74,9 @@ def _run() -> AppTest:
     return at
 
 
-def _captions(at: AppTest) -> str:
-    return "\n".join(c.value for c in at.caption)
+def _page_text(at: AppTest) -> str:
+    """All custom HTML on the page (banner, tiles, panels) as one string."""
+    return "\n".join(m.value for m in at.markdown)
 
 
 def _button(at: AppTest, label: str):
@@ -88,8 +89,8 @@ def _button(at: AppTest, label: str):
 def test_page_renders_without_errors(api):
     at = _run()
 
-    assert at.title[0].value == "Wildfire Prediction Platform"
-    assert any(m.value == "## Insights" for m in at.markdown)
+    assert "Wildfire Prediction Platform" in _page_text(at)
+    assert "How the forecast develops" in _page_text(at)
     assert not at.error
     assert not at.warning
 
@@ -101,13 +102,13 @@ def test_defaults_to_saved_predictions_for_whole_country(api):
     assert "live" not in api.calls
     assert at.selectbox[0].value == "Australia (National)"
     # Offshore cell included -- national view is unfiltered.
-    assert "Showing 6 grid cell(s) for Australia (National)" in _captions(at)
-    assert "from the last saved prediction run" in _captions(at)
+    assert "Showing 6 grid cell(s) for Australia (National)" in _page_text(at)
+    assert "from the last saved prediction run" in _page_text(at)
 
 
 def test_first_forecast_day_is_selected_by_default(api):
     at = _run()
-    assert f"forecast day {TODAY}" in _captions(at)
+    assert f"forecast day {TODAY}" in _page_text(at)
     assert _button(at, "Today").proto.type == "primary"
 
 
@@ -124,7 +125,7 @@ def test_region_selector_filters_cells(api):
     at.selectbox[0].select("Victoria").run()
 
     assert not at.exception
-    assert "Showing 2 grid cell(s) for Victoria" in _captions(at)
+    assert "Showing 2 grid cell(s) for Victoria" in _page_text(at)
 
 
 def test_region_without_cells_shows_empty_state(api):
@@ -132,8 +133,8 @@ def test_region_without_cells_shows_empty_state(api):
     at.selectbox[0].select("Tasmania").run()
 
     assert not at.exception
-    assert "Showing" not in _captions(at)
-    assert any("No prediction data" in m.value for m in at.markdown)
+    assert "Showing" not in _page_text(at)
+    assert "No forecast for this region yet" in _page_text(at)
 
 
 def test_clicking_a_day_changes_the_forecast_day(api):
@@ -141,17 +142,17 @@ def test_clicking_a_day_changes_the_forecast_day(api):
     _button(at, "Tomorrow").click().run()
 
     assert not at.exception
-    assert f"forecast day {TOMORROW}" in _captions(at)
+    assert f"forecast day {TOMORROW}" in _page_text(at)
 
 
 def test_live_source_uses_live_endpoint(api):
     at = _run()
     api.calls.clear()
-    at.radio[0].set_value("Live").run()
+    at.segmented_control[0].set_value("Live").run()
 
     assert "live" in api.calls
     assert "stored" not in api.calls
-    assert "computed live from current weather" in _captions(at)
+    assert "computed live from current weather" in _page_text(at)
 
 
 def test_refresh_button_triggers_refresh(api):
@@ -173,7 +174,7 @@ def test_api_down_shows_messages_not_a_crash(monkeypatch, empty_predictions):
 
     assert any(message in e.value for e in at.error)
     assert any("Prediction API unavailable" in w.value for w in at.warning)
-    assert "Showing" not in _captions(at)
+    assert "Showing" not in _page_text(at)
 
 
 def test_no_predictions_yet_explains_next_step(monkeypatch, empty_predictions):
