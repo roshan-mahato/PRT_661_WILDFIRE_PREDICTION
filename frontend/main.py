@@ -10,7 +10,6 @@ first, then run this:
 
 import pandas as pd
 import streamlit as st
-
 from components.charts import render_insights_section
 from components.day_strip import render_day_strip
 from components.headers import render_header
@@ -18,6 +17,7 @@ from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
 from utils.api_client import (
     check_api_health,
+    fetch_feature_importance,
     fetch_live_predictions,
     fetch_stored_predictions,
     refresh_predictions,
@@ -99,4 +99,5 @@ if summary["has_data"]:
 # ---------------------------------------------------------------------------
 render_insights_row(summary)
 render_map_with_insights(day_regional, region, summary)
-render_insights_section(trend, summary)
+importance, importance_error = fetch_feature_importance()
+render_insights_section(trend, summary, regional, importance, importance_error)

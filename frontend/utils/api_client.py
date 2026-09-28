@@ -133,6 +133,22 @@ def refresh_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[s
     return _payload_to_frame(payload), None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_feature_importance() -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    Reads the trained model's per-feature importance (% share, sums to 100).
+
+    Cached for an hour -- importance only changes when the model is retrained.
+
+    Returns:
+        (DataFrame with columns [feature, importance], error_message).
+    """
+    payload, error = _get("/model/feature-importance")
+    if error or not payload or not payload.get("features"):
+        return pd.DataFrame(columns=["feature", "importance"]), error
+    return pd.DataFrame(payload["features"]), None
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def check_api_health() -> Tuple[bool, str]:
     """

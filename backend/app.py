@@ -20,6 +20,7 @@ from sqlalchemy import text
 
 from backend.database import engine
 from Scripts.prediction_engine import load_model_bundle
+from backend.routers import model as model_router
 from backend.routers import prediction as prediction_router
 from backend.schemas.prediction import HealthResponse
 
@@ -64,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(prediction_router.router)
+app.include_router(model_router.router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
@@ -106,5 +108,6 @@ def root():
             "/predictions/location",
             "/predictions/refresh",
             "/predictions/stored",
+            "/model/feature-importance",
         ],
     }
