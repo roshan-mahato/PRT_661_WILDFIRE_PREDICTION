@@ -8,7 +8,6 @@ import pandas as pd
 import streamlit as st
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
-
 from utils.regions import ffdi_band, get_region_view
 from utils.theme import COLORS, SEVERITY_STYLE
 
@@ -42,6 +41,13 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
 
     with map_col:
         center, zoom = get_region_view(region)
+        region_views = {
+            "Australia (National)": ([-25.2744, 133.7751], 4),
+            "New South Wales": ([-33.8688, 151.2093], 8),
+            "Victoria": ([-37.8136, 144.9631], 10),
+            "Queensland": ([-27.4705, 153.0260], 8),
+        }
+        center, zoom = region_views.get(region, ([-25.2744, 133.7751], 10))
 
         attr = (
             '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, '
@@ -128,13 +134,13 @@ def _render_threat_panel(summary: dict):
     if not summary.get("has_data"):
         st.markdown(
             f"""
-            <div style="border: 1px solid {COLORS['border']}; border-radius: 12px;
-                        padding: 16px; background: {COLORS['surface']};">
-                <h4 style="margin-top:0; color: {COLORS['text_muted']}; font-size: 1.05rem;">
+            <div style="border: 1px solid {COLORS["border"]}; border-radius: 12px;
+                        padding: 16px; background: {COLORS["surface"]};">
+                <h4 style="margin-top:0; color: {COLORS["text_muted"]}; font-size: 1.05rem;">
                     Region Threat Summary
                 </h4>
-                <hr style="border-color: {COLORS['border']}; margin: 10px 0;">
-                <p style="font-size: 0.85rem; color: {COLORS['text_muted']};">
+                <hr style="border-color: {COLORS["border"]}; margin: 10px 0;">
+                <p style="font-size: 0.85rem; color: {COLORS["text_muted"]};">
                     No prediction data for this region yet.
                 </p>
             </div>
@@ -162,12 +168,12 @@ def _render_threat_panel(summary: dict):
 
     st.markdown(
         f"""
-        <div style="border: 1px solid {COLORS['border']}; border-radius: 12px;
-                    padding: 16px; background: {COLORS['surface']};">
+        <div style="border: 1px solid {COLORS["border"]}; border-radius: 12px;
+                    padding: 16px; background: {COLORS["surface"]};">
             <h4 style="margin-top:0; color: {colour}; font-size: 1.05rem;">
                 Region Threat Summary
             </h4>
-            <hr style="border-color: {COLORS['border']}; margin: 10px 0;">
+            <hr style="border-color: {COLORS["border"]}; margin: 10px 0;">
             <p style="font-size: 0.85rem; margin-bottom: 12px;">
                 <b>Forecast day:</b><br>{forecast_date}
             </p>
@@ -175,23 +181,23 @@ def _render_threat_panel(summary: dict):
                 <b>Highest risk cell:</b><br>{lat}, {lon}
             </p>
             <p style="font-size: 0.85rem; margin-bottom: 12px;">
-                <b>Peak probability:</b><br>{summary['max_probability']:.1%}
+                <b>Peak probability:</b><br>{summary["max_probability"]:.1%}
             </p>
             <p style="font-size: 0.85rem; margin-bottom: 12px;">
-                <b>Peak FFDI:</b><br>{summary['max_ffdi']:.1f} ({ffdi_band(summary['max_ffdi'])})
+                <b>Peak FFDI:</b><br>{summary["max_ffdi"]:.1f} ({ffdi_band(summary["max_ffdi"])})
             </p>
             <p style="font-size: 0.85rem; margin-bottom: 12px;">
-                <b>Peak KBDI:</b><br>{summary['max_kbdi']:.1f} / 203.2
+                <b>Peak KBDI:</b><br>{summary["max_kbdi"]:.1f} / 203.2
             </p>
             <p style="font-size: 0.85rem; margin-bottom: 4px;"><b>Cells by risk level:</b></p>
-            <p style="font-size: 0.8rem; margin: 0 0 12px 0; color: {COLORS['text_muted']};">
-                Extreme {counts['Extreme']} &middot; High {counts['High']} &middot;
-                Moderate {counts['Moderate']} &middot; Low {counts['Low']}
+            <p style="font-size: 0.8rem; margin: 0 0 12px 0; color: {COLORS["text_muted"]};">
+                Extreme {counts["Extreme"]} &middot; High {counts["High"]} &middot;
+                Moderate {counts["Moderate"]} &middot; Low {counts["Low"]}
             </p>
             <div style="border-left: 3px solid {colour}; padding: 8px 10px;
                         border-radius: 4px; font-size: 0.8rem; background: {bg};">
-                <b>Status:</b> {summary['max_risk_level']} risk across
-                {summary['cell_count']} monitored cell(s).
+                <b>Status:</b> {summary["max_risk_level"]} risk across
+                {summary["cell_count"]} monitored cell(s).
             </div>
             {spinup_note}
         </div>
