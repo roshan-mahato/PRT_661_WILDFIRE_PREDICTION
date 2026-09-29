@@ -51,10 +51,10 @@ from retry_requests import retry
 # `backend` can be imported.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.api.weather_live import save_weather_live
+from backend.api.openmeteo import save_weather_live
 from backend.database import engine
 from backend.db_model.base import Base
-from backend.db_model.weather_live import WeatherLive
+from backend.db_model.openmeteo import OpenMeteo
 
 # ---------- CONFIG ----------
 # Absolute paths, so the script behaves the same whether it is run from the
@@ -72,11 +72,31 @@ AUS_LAT_MIN, AUS_LAT_MAX = -44, -10
 AUS_LON_MIN, AUS_LON_MAX = 112, 154
 GRID_SIZE_DEGREES = 0.5
 
-CALL_LIMIT_PER_RUN = 9000
-MAX_WORKERS = 6                 # reduced slightly to leave headroom for other concurrent scripts
-MAX_REQUESTS_PER_SECOND = 6     # leaves room for fetch_live_firms/fetch_live_weather running concurrently
-MAX_REQUESTS_PER_HOUR = 4000    # more headroom below the real 5,000/hour limit
-MAX_REQUESTS_PER_DAY = 9000     # more headroom below the real 10,000/day limit
+# Self-hosted by default, same as fetch_weather_data.py: the full 5,865-point
+# grid can't be refreshed inside the public API's 10,000/day quota, and the
+# quota is enforced by Open-Meteo's hosted infrastructure, not the open-source
+# server (see docker-compose.yml at the repo root). Override with the
+# OPENMETEO_FORECAST_URL env var, e.g. for a small test run against the
+# public API.
+FORECAST_URL = os.environ.get("OPENMETEO_FORECAST_URL", "http://127.0.0.1:8080/v1/forecast")
+# FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+USING_PUBLIC_API = "api.open-meteo.com" in FORECAST_URL
+
+if USING_PUBLIC_API:
+    CALL_LIMIT_PER_RUN = 9000
+    MAX_WORKERS = 6                 # reduced slightly to leave headroom for other concurrent scripts
+    MAX_REQUESTS_PER_SECOND = 6     # leaves room for fetch_live_firms/fetch_live_weather running concurrently
+    MAX_REQUESTS_PER_HOUR = 4000    # more headroom below the real 5,000/hour limit
+    MAX_REQUESTS_PER_DAY = 9000     # more headroom below the real 10,000/day limit
+else:
+    # No quota on the self-hosted server; the only ceiling is the local
+    # machine. The limiter is kept in place (with generous windows) so the
+    # same code path runs either way.
+    CALL_LIMIT_PER_RUN = 10**9
+    MAX_WORKERS = 12
+    MAX_REQUESTS_PER_SECOND = 50
+    MAX_REQUESTS_PER_HOUR = 10**9
+    MAX_REQUESTS_PER_DAY = 10**9
 
 HOURLY_VARS = [
     "temperature_2m",
@@ -90,8 +110,6 @@ HOURLY_VARS = [
     "vapour_pressure_deficit",
     "et0_fao_evapotranspiration",
 ]
-FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-
 cache_session = requests_cache.CachedSession(".cache", expire_after=900)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
@@ -180,11 +198,11 @@ def get_grid_points(grid_size):
     if os.path.exists(GRID_POINTS_CSV_PATH):
         grid_df = pd.read_csv(GRID_POINTS_CSV_PATH)
         print(f"Loaded cached grid from {GRID_POINTS_CSV_PATH} ({len(grid_df)} points).")
-        return list(zip(grid_df["lat"], grid_df["lon"]))
+        return list(zip(grid_df["lat_round"], grid_df["lon_round"]))
 
     print("No cached grid found — building it now...")
     grid = build_australia_grid(grid_size)
-    grid_df = pd.DataFrame(grid, columns=["lat", "lon"])
+    grid_df = pd.DataFrame(grid, columns=["lat_round", "lon_round"])
     grid_df.to_csv(GRID_POINTS_CSV_PATH, index=False)
     print(f"Saved grid to {GRID_POINTS_CSV_PATH} ({len(grid)} points) for future runs.")
     return grid
@@ -205,6 +223,25 @@ def mark_point_complete(key):
     with log_lock:
         with open(PROGRESS_LOG_PATH, "a") as f:
             f.write(key + "\n")
+
+
+def check_server_reachable():
+    """Fail fast with a useful message if the self-hosted server isn't up,
+    instead of letting every grid point burn through 5 retries."""
+    if USING_PUBLIC_API:
+        return
+    import requests
+    try:
+        # Any response (even a 400 for missing params) means the server is up.
+        requests.get(FORECAST_URL, timeout=5)
+    except requests.exceptions.ConnectionError:
+        sys.exit(
+            f"Cannot reach the self-hosted Open-Meteo server at {FORECAST_URL}.\n"
+            "Start Docker Desktop, then from the repo root run:\n"
+            "    docker compose up -d\n"
+            "or set OPENMETEO_FORECAST_URL=https://api.open-meteo.com/v1/forecast "
+            "for a small rate-limited run against the public API."
+        )
 
 
 def fetch_forecast(lat, lon):
@@ -277,6 +314,10 @@ def fetch_and_save_point(lat, lon):
 
 
 def main():
+    check_server_reachable()
+    print(f"Open-Meteo endpoint: {FORECAST_URL} "
+          f"({'public API, rate-limited' if USING_PUBLIC_API else 'self-hosted, no quota'})")
+
     grid_points = get_grid_points(GRID_SIZE_DEGREES)
     print(f"Total grid points: {len(grid_points)} (grid size: {GRID_SIZE_DEGREES} degrees).")
 
@@ -336,7 +377,7 @@ def main():
 
     if done_total >= len(grid_points):
         print(f"All grid points fetched! Data saved to {OUTPUT_CSV_PATH} and the "
-              f"'{WeatherLive.__tablename__}' table.")
+              f"'{OpenMeteo.__tablename__}' table.")
     elif pending:
         print(f"{len(pending)} points still failing after {max_retry_rounds} rounds — "
               f"run this script again later to keep retrying.")

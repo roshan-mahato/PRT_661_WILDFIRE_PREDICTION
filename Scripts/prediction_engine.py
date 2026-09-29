@@ -324,28 +324,48 @@ def load_model_bundle() -> dict:
     return joblib.load(MODEL_PATH)
 
 
-def predict_from_features(daily: pd.DataFrame, bundle: dict | None = None) -> pd.DataFrame:
+def predict_from_features(
+    daily: pd.DataFrame, bundle: dict | None = None
+) -> pd.DataFrame:
     """Applies the trained model bundle to an already-feature-engineered daily DataFrame."""
     daily = daily.copy()
     bundle = bundle or load_model_bundle()
     model, features = bundle["model"], bundle["features"]
-    threshold = bundle["threshold_f1_optimal"]
+    threshold = bundle.get("threshold_f1_optimal", 0.5)
 
     missing_feats = [f for f in features if f not in daily.columns]
     if missing_feats:
-        raise ValueError(f"Missing required model features after engineering: {missing_feats}")
+        raise ValueError(
+            f"Missing required model features after engineering: {missing_feats}"
+        )
 
     X = daily[features]
     if bundle.get("scaler") is not None:
-        X = pd.DataFrame(bundle["scaler"].transform(X), columns=features, index=X.index)
+        X = pd.DataFrame(
+            bundle["scaler"].transform(X), columns=features, index=X.index
+        )
 
     proba = model.predict_proba(X)[:, 1]
     daily["fire_probability"] = proba
     daily["fire_predicted"] = (proba >= threshold).astype(int)
+
+    # Dynamic risk binning scaled around the optimal decision threshold
+    # so anything the model flags as a fire (proba >= threshold) is High or Extreme.
+    risk_bins = [
+        -np.inf,
+        threshold * 0.5,  # Low -> Moderate boundary
+        threshold,        # Moderate -> High boundary (Decision Threshold)
+        threshold + (1.0 - threshold) * 0.5,  # High -> Extreme boundary
+        np.inf,
+    ]
+
     daily["risk_level"] = pd.cut(
-        proba, bins=[-0.01, 0.25, 0.5, 0.75, 1.01],
-        labels=["Low", "Moderate", "High", "Extreme"]
+        proba,
+        bins=risk_bins,
+        labels=["Low", "Moderate", "High", "Extreme"],
+        right=False,
     )
+
     return daily
 
 

@@ -19,7 +19,8 @@ import requests
 import streamlit as st
 
 API_BASE_URL = os.getenv("WILDFIRE_API_URL", "http://127.0.0.1:8000")
-REQUEST_TIMEOUT = 30  # seconds; a full refresh can take a while
+REQUEST_TIMEOUT = 30  # seconds for ordinary API reads
+REFRESH_TIMEOUT = int(os.getenv("WILDFIRE_REFRESH_TIMEOUT", "180"))
 
 PREDICTION_COLS = [
     "lat_round", "lon_round", "acq_date", "temperature_2m",
@@ -113,7 +114,7 @@ def refresh_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[s
         response = requests.post(
             f"{API_BASE_URL}/predictions/refresh",
             params={"hours_back": hours_back},
-            timeout=REQUEST_TIMEOUT,
+            timeout=REFRESH_TIMEOUT,
         )
         response.raise_for_status()
         payload = response.json()
@@ -121,7 +122,7 @@ def refresh_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[s
         return _empty_predictions(), f"Cannot reach the prediction API at {API_BASE_URL}."
     except requests.exceptions.Timeout:
         return _empty_predictions(), (
-            f"Refresh timed out after {REQUEST_TIMEOUT}s. A full-grid refresh can be slow; "
+            f"Refresh timed out after {REFRESH_TIMEOUT}s. A full-grid refresh can be slow; "
             "it may still be running on the server."
         )
     except Exception as exc:  # noqa: BLE001

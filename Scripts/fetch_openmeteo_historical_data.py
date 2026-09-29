@@ -14,10 +14,22 @@ PROGRESS_LOG_PATH = "data/fetch_progress.log"
 
 GRID_SIZE_DEGREES = 0.5  # ~55km cells — better spatial precision, ~4 days to complete with the daily budget below
 CHUNK_DAYS = 14
-REQUEST_DELAY_SECONDS = 1
-DAILY_CALL_LIMIT = (
-    9900  # pushed close to the 10,000/day free limit, small safety buffer only
-)
+
+# Self-hosted by default, same as fetch_weather_data.py / fetch_openmeteo_live.py
+# (docker-compose.yml at the repo root). warm_start_kbdi.py imports ARCHIVE_URL
+# from here, so it follows the same switch. Override with OPENMETEO_ARCHIVE_URL.
+ARCHIVE_URL = os.environ.get("OPENMETEO_ARCHIVE_URL", "http://127.0.0.1:8080/v1/archive")
+# ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+USING_PUBLIC_API = "archive-api.open-meteo.com" in ARCHIVE_URL
+
+if USING_PUBLIC_API:
+    REQUEST_DELAY_SECONDS = 1
+    DAILY_CALL_LIMIT = (
+        9900  # pushed close to the 10,000/day free limit, small safety buffer only
+    )
+else:
+    REQUEST_DELAY_SECONDS = 0  # no quota on the self-hosted server
+    DAILY_CALL_LIMIT = 10**9
 
 HOURLY_VARS = [
     "temperature_2m",
@@ -31,8 +43,6 @@ HOURLY_VARS = [
     "vapour_pressure_deficit",  # air dryness, closely tied to fire risk
     "et0_fao_evapotranspiration",  # rate of fuel drying
 ]  # exactly 10 — the threshold before extra fields start costing more than 1 call each
-ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
-
 cache_session = requests_cache.CachedSession(".cache", expire_after=86400)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
