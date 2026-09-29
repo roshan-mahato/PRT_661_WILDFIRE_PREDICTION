@@ -2,19 +2,21 @@
 Forecast day selector -- one tile per day across the forecast window, in the
 style of a weather app.
 
-The buttons are rendered in their own row of columns, above the tiles, because
-a click is only reported on the rerun it triggers: handling every button first
-means the tiles below are drawn from the selection the user just made rather
-than the previous one.
+Each day is a button (the day name) sitting on top of a tile with that day's
+headline figures. The buttons use an on_click callback, which Streamlit runs
+*before* the rerun, so every tile is drawn from the selection the user just
+made rather than the previous one.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import streamlit as st
 
+from utils.styles import html
 from utils.theme import COLORS, SEVERITY_STYLE
 
 SESSION_KEY = "selected_forecast_day"
+SLOTS = 7  # a full forecast week; fewer days leave placeholders, not giant tiles
 
 
 def _day_label(day: date) -> str:
@@ -29,36 +31,37 @@ def _day_label(day: date) -> str:
 
 def _tile_html(option: dict, selected: bool) -> str:
     colour, bg = SEVERITY_STYLE.get(option["peak_level"], (COLORS["border"], COLORS["bg"]))
-    border = colour if selected else COLORS["border"]
-    background = bg if selected else COLORS["surface"]
-    weight = "2px" if selected else "1px"
+    classes = "day-tile selected" if selected else "day-tile"
+    return (
+        f'<div class="{classes}" style="--sev:{colour};--sev-bg:{bg};">'
+        f'<div class="date">{option["date"].strftime("%d %b")}</div>'
+        f'<div class="prob">{option["peak_probability"]:.0%}</div>'
+        f'<div class="lvl">{option["peak_level"]}</div>'
+        f'<div class="meta">{option["at_risk_count"]} of {option["cell_count"]} cells</div>'
+        f'<div class="meta" style="margin-top:0">FFDI {option["max_ffdi"]:.1f}</div>'
+        "</div>"
+    )
 
-    return f"""
-    <div style="
-        border: {weight} solid {border};
-        border-radius: 10px;
-        background: {background};
-        padding: 10px 8px;
-        text-align: center;
-        margin-bottom: 10px;
-    ">
-        <div style="font-size: 0.72rem; color: {COLORS['text_dim']};">
-            {option['date'].strftime('%d %b')}
-        </div>
-        <div style="font-size: 1.35rem; font-weight: 600; color: {colour}; margin: 2px 0;">
-            {option['peak_probability']:.0%}
-        </div>
-        <div style="font-size: 0.78rem; font-weight: 600; color: {colour};">
-            {option['peak_level']}
-        </div>
-        <div style="font-size: 0.7rem; color: {COLORS['text_muted']}; margin-top: 4px;">
-            {option['at_risk_count']} of {option['cell_count']} cells
-        </div>
-        <div style="font-size: 0.7rem; color: {COLORS['text_muted']};">
-            FFDI {option['max_ffdi']:.1f}
-        </div>
-    </div>
+
+def _select(day: date) -> None:
+    st.session_state[SESSION_KEY] = day
+
+
+def resolve_selected_day(options: list):
     """
+    Returns the currently selected date, falling back to the first day.
+
+    Separate from render_day_strip() so the page can use the selection (for
+    the status banner) before the strip itself is drawn further down.
+    """
+    if not options:
+        return None
+    dates = [option["date"] for option in options]
+    # The available days change with the region, the data source and every
+    # refresh, so a previously selected day may no longer exist.
+    if st.session_state.get(SESSION_KEY) not in dates:
+        st.session_state[SESSION_KEY] = dates[0]
+    return st.session_state[SESSION_KEY]
 
 
 def render_day_strip(options: list):
@@ -75,38 +78,42 @@ def render_day_strip(options: list):
         return None
 
     dates = [option["date"] for option in options]
+    selected = resolve_selected_day(options)
 
-    # The available days change with the region, the data source and every
-    # refresh, so a previously selected day may no longer exist.
-    if st.session_state.get(SESSION_KEY) not in dates:
-        st.session_state[SESSION_KEY] = dates[0]
+    if len(options) == 1:
+        hint = "Only one day in this run. Switch to Live for the full outlook."
+    else:
+        hint = "Select a day to update the cards and map"
 
-    st.markdown(
-        f"<div style='font-size:0.8rem; color:{COLORS['text_muted']}; "
-        f"margin-bottom:6px;'>Forecast day</div>",
-        unsafe_allow_html=True,
-    )
+    with st.container(key="daystrip"):
+        html(
+            f"""
+            <div class="day-strip-head">
+              <span class="title">Forecast days</span>
+              <span class="hint">{hint}</span>
+            </div>
+            """
+        )
 
-    button_cols = st.columns(len(options))
-    for index, col in enumerate(button_cols):
-        with col:
-            is_selected = dates[index] == st.session_state[SESSION_KEY]
-            if st.button(
-                _day_label(dates[index]),
-                key=f"forecast_day_{dates[index]}",
-                use_container_width=True,
-                type="primary" if is_selected else "secondary",
-            ):
-                st.session_state[SESSION_KEY] = dates[index]
-
-    selected = st.session_state[SESSION_KEY]
-
-    tile_cols = st.columns(len(options))
-    for index, col in enumerate(tile_cols):
-        with col:
-            st.markdown(
-                _tile_html(options[index], dates[index] == selected),
-                unsafe_allow_html=True,
-            )
+        cols = st.columns(max(SLOTS, len(options)), gap="small")
+        for index, col in enumerate(cols):
+            with col:
+                if index < len(options):
+                    day = dates[index]
+                    st.button(
+                        _day_label(day),
+                        key=f"forecast_day_{day}",
+                        width="stretch",
+                        type="primary" if day == selected else "secondary",
+                        on_click=_select,
+                        args=(day,),
+                    )
+                    html(_tile_html(options[index], day == selected))
+                else:
+                    missing = dates[-1] + timedelta(days=index - len(options) + 1)
+                    html(
+                        f'<div class="day-placeholder">{missing.strftime("%a %d %b")}'
+                        "<br>not in this run</div>"
+                    )
 
     return selected

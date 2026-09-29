@@ -22,3 +22,18 @@ dependencies = [
     "streamlit>=1.62.0",
     "streamlit-folium>=0.27.4",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# The dashboard imports its own modules as `components.*` / `utils.*`
+# (Streamlit puts frontend/ on the path), so the tests need the same.
+pythonpath = ["frontend", "."]
+testpaths = ["tests"]
+filterwarnings = [
+    # st.cache_data and friends warn when called outside `streamlit run`.
+    "ignore::UserWarning:streamlit",
+]

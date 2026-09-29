@@ -10,14 +10,15 @@ first, then run this:
 
 import pandas as pd
 import streamlit as st
-
 from components.charts import render_insights_section
-from components.day_strip import render_day_strip
+from components.day_strip import render_day_strip, resolve_selected_day
 from components.headers import render_header
+from components.hero import render_hero
 from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
 from utils.api_client import (
     check_api_health,
+    fetch_feature_importance,
     fetch_live_predictions,
     fetch_stored_predictions,
     refresh_predictions,
@@ -28,6 +29,7 @@ from utils.regions import (
     filter_by_region,
     summarise_region,
 )
+from utils.styles import inject_global_css
 
 st.set_page_config(
     page_title="Wildfire Prediction Platform",
@@ -35,6 +37,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+inject_global_css()
 
 controls = render_header()
 region = controls["region"]
@@ -75,9 +78,12 @@ if predictions.empty and not load_error:
 # ---------------------------------------------------------------------------
 regional = filter_by_region(predictions, region)
 
-# The strip selects one day; the cards and map describe that day, while the
-# trend chart keeps the whole window so the shape of the forecast stays visible.
-selected_day = render_day_strip(day_options(regional))
+# The strip selects one day; the banner, cards and map describe that day,
+# while the trend charts keep the whole window so the shape of the forecast
+# stays visible. The selection is resolved before anything is drawn because
+# the banner sits above the strip.
+options = day_options(regional)
+selected_day = resolve_selected_day(options)
 if selected_day is None:
     day_regional = regional
 else:
@@ -88,15 +94,12 @@ else:
 summary = summarise_region(day_regional, region)
 trend = build_daily_trend(regional)
 
-if summary["has_data"]:
-    st.caption(
-        f"Showing {summary['cell_count']} grid cell(s) for {region} — "
-        f"forecast day {summary['forecast_date']}, {source_label}."
-    )
-
 # ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
+render_hero(summary, region, source_label)
+render_day_strip(options)
 render_insights_row(summary)
 render_map_with_insights(day_regional, region, summary)
-render_insights_section(trend, summary)
+importance, importance_error = fetch_feature_importance()
+render_insights_section(trend, summary, regional, importance, importance_error)
