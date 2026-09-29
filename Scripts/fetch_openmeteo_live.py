@@ -36,14 +36,14 @@ Before running:
 
 import os
 import sys
-import time
 import threading
+import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
-import pandas as pd
 import openmeteo_requests
+import pandas as pd
 import requests_cache
 from retry_requests import retry
 
@@ -78,16 +78,20 @@ GRID_SIZE_DEGREES = 0.5
 # server (see docker-compose.yml at the repo root). Override with the
 # OPENMETEO_FORECAST_URL env var, e.g. for a small test run against the
 # public API.
-FORECAST_URL = os.environ.get("OPENMETEO_FORECAST_URL", "http://127.0.0.1:8080/v1/forecast")
+FORECAST_URL = os.environ.get(
+    "OPENMETEO_FORECAST_URL", "http://127.0.0.1:8080/v1/forecast"
+)
 # FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 USING_PUBLIC_API = "api.open-meteo.com" in FORECAST_URL
 
 if USING_PUBLIC_API:
     CALL_LIMIT_PER_RUN = 9000
-    MAX_WORKERS = 6                 # reduced slightly to leave headroom for other concurrent scripts
-    MAX_REQUESTS_PER_SECOND = 6     # leaves room for fetch_live_firms/fetch_live_weather running concurrently
-    MAX_REQUESTS_PER_HOUR = 4000    # more headroom below the real 5,000/hour limit
-    MAX_REQUESTS_PER_DAY = 9000     # more headroom below the real 10,000/day limit
+    MAX_WORKERS = 6  # reduced slightly to leave headroom for other concurrent scripts
+    MAX_REQUESTS_PER_SECOND = (
+        6  # leaves room for fetch_live_firms/fetch_live_weather running concurrently
+    )
+    MAX_REQUESTS_PER_HOUR = 4000  # more headroom below the real 5,000/hour limit
+    MAX_REQUESTS_PER_DAY = 9000  # more headroom below the real 10,000/day limit
 else:
     # No quota on the self-hosted server; the only ceiling is the local
     # machine. The limiter is kept in place (with generous windows) so the
@@ -140,7 +144,9 @@ class RateLimiter:
         ]
         self.lock = threading.Lock()
         self.timestamps = {window: deque() for _, window in self.limits}
-        self.external_pause_until = 0   # monotonic time; set when the SERVER itself says "limit exceeded"
+        self.external_pause_until = (
+            0  # monotonic time; set when the SERVER itself says "limit exceeded"
+        )
 
     def trigger_external_pause(self, seconds):
         """Call this when the API itself returns a rate-limit error — this
@@ -153,8 +159,10 @@ class RateLimiter:
             new_until = time.monotonic() + seconds
             if new_until > self.external_pause_until:
                 self.external_pause_until = new_until
-                print(f"\n[Rate limiter] Server reported limit exceeded. "
-                      f"Pausing ALL requests for {seconds // 60} minutes, then resuming automatically.\n")
+                print(
+                    f"\n[Rate limiter] Server reported limit exceeded. "
+                    f"Pausing ALL requests for {seconds // 60} minutes, then resuming automatically.\n"
+                )
 
     def acquire(self):
         while True:
@@ -185,7 +193,9 @@ class RateLimiter:
             time.sleep(min(wait_time, 5))
 
 
-rate_limiter = RateLimiter(MAX_REQUESTS_PER_SECOND, MAX_REQUESTS_PER_HOUR, MAX_REQUESTS_PER_DAY)
+rate_limiter = RateLimiter(
+    MAX_REQUESTS_PER_SECOND, MAX_REQUESTS_PER_HOUR, MAX_REQUESTS_PER_DAY
+)
 
 
 def build_australia_grid(grid_size):
@@ -197,7 +207,9 @@ def build_australia_grid(grid_size):
 def get_grid_points(grid_size):
     if os.path.exists(GRID_POINTS_CSV_PATH):
         grid_df = pd.read_csv(GRID_POINTS_CSV_PATH)
-        print(f"Loaded cached grid from {GRID_POINTS_CSV_PATH} ({len(grid_df)} points).")
+        print(
+            f"Loaded cached grid from {GRID_POINTS_CSV_PATH} ({len(grid_df)} points)."
+        )
         return list(zip(grid_df["lat_round"], grid_df["lon_round"]))
 
     print("No cached grid found — building it now...")
@@ -231,6 +243,7 @@ def check_server_reachable():
     if USING_PUBLIC_API:
         return
     import requests
+
     try:
         # Any response (even a 400 for missing params) means the server is up.
         requests.get(FORECAST_URL, timeout=5)
@@ -309,17 +322,23 @@ def fetch_and_save_point(lat, lon):
         # our own tracking thinks there's room, e.g. if another script
         # (the 15-min live scheduler) is using the same account/IP too.
         if "limit exceeded" in error_text.lower() or "rate limit" in error_text.lower():
-            rate_limiter.trigger_external_pause(3600)  # pause ~1 hour, matches Open-Meteo's hourly window
+            rate_limiter.trigger_external_pause(
+                3600
+            )  # pause ~1 hour, matches Open-Meteo's hourly window
         return (lat, lon, False, error_text)
 
 
 def main():
     check_server_reachable()
-    print(f"Open-Meteo endpoint: {FORECAST_URL} "
-          f"({'public API, rate-limited' if USING_PUBLIC_API else 'self-hosted, no quota'})")
+    print(
+        f"Open-Meteo endpoint: {FORECAST_URL} "
+        f"({'public API, rate-limited' if USING_PUBLIC_API else 'self-hosted, no quota'})"
+    )
 
     grid_points = get_grid_points(GRID_SIZE_DEGREES)
-    print(f"Total grid points: {len(grid_points)} (grid size: {GRID_SIZE_DEGREES} degrees).")
+    print(
+        f"Total grid points: {len(grid_points)} (grid size: {GRID_SIZE_DEGREES} degrees)."
+    )
 
     completed = load_completed_points()
     print(f"Already completed (from previous runs): {len(completed)}")
@@ -335,12 +354,16 @@ def main():
         return
 
     batch = remaining_points[:CALL_LIMIT_PER_RUN]
-    print(f"Fetching {len(batch)} points this run, using {MAX_WORKERS} concurrent workers "
-          f"(rate-limited to {MAX_REQUESTS_PER_SECOND}/sec, {MAX_REQUESTS_PER_HOUR}/hour, "
-          f"{MAX_REQUESTS_PER_DAY}/day)...")
+    print(
+        f"Fetching {len(batch)} points this run, using {MAX_WORKERS} concurrent workers "
+        f"(rate-limited to {MAX_REQUESTS_PER_SECOND}/sec, {MAX_REQUESTS_PER_HOUR}/hour, "
+        f"{MAX_REQUESTS_PER_DAY}/day)..."
+    )
 
     pending = list(batch)
-    max_retry_rounds = 5   # in case of repeated hourly-limit hits, keep retrying automatically
+    max_retry_rounds = (
+        5  # in case of repeated hourly-limit hits, keep retrying automatically
+    )
     round_num = 0
 
     while pending and round_num < max_retry_rounds:
@@ -349,7 +372,10 @@ def main():
         failed_points = []
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {executor.submit(fetch_and_save_point, lat, lon): (lat, lon) for lat, lon in pending}
+            futures = {
+                executor.submit(fetch_and_save_point, lat, lon): (lat, lon)
+                for lat, lon in pending
+            }
 
             for i, future in enumerate(as_completed(futures), start=1):
                 lat, lon, success, error = future.result()
@@ -361,26 +387,38 @@ def main():
 
                 if i % 50 == 0 or i == len(pending):
                     done_total = len(completed) + succeeded
-                    print(f"Progress: {i}/{len(pending)} this round "
-                          f"({succeeded} succeeded, {len(failed_points)} failed)")
+                    print(
+                        f"Progress: {i}/{len(pending)} this round "
+                        f"({succeeded} succeeded, {len(failed_points)} failed)"
+                    )
 
-        completed = load_completed_points()  # refresh — other threads/workers updated the log
-        print(f"\nRound {round_num} complete. {succeeded} succeeded, {len(failed_points)} failed.")
+        completed = (
+            load_completed_points()
+        )  # refresh — other threads/workers updated the log
+        print(
+            f"\nRound {round_num} complete. {succeeded} succeeded, {len(failed_points)} failed."
+        )
 
         pending = failed_points
         if pending:
-            print(f"{len(pending)} points still failing — retrying automatically "
-                  f"(round {round_num + 1}/{max_retry_rounds})...")
+            print(
+                f"{len(pending)} points still failing — retrying automatically "
+                f"(round {round_num + 1}/{max_retry_rounds})..."
+            )
 
     done_total = len(load_completed_points())
     print(f"\nOverall progress: {done_total}/{len(grid_points)} points done.")
 
     if done_total >= len(grid_points):
-        print(f"All grid points fetched! Data saved to {OUTPUT_CSV_PATH} and the "
-              f"'{OpenMeteo.__tablename__}' table.")
+        print(
+            f"All grid points fetched! Data saved to {OUTPUT_CSV_PATH} and the "
+            f"'{OpenMeteo.__tablename__}' table."
+        )
     elif pending:
-        print(f"{len(pending)} points still failing after {max_retry_rounds} rounds — "
-              f"run this script again later to keep retrying.")
+        print(
+            f"{len(pending)} points still failing after {max_retry_rounds} rounds — "
+            f"run this script again later to keep retrying."
+        )
     else:
         print("Run this script again to continue fetching the rest.")
 
