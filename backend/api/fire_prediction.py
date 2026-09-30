@@ -1,100 +1,100 @@
 """
-API for storing and querying generated fire-risk predictions in the
-`fire_prediction` table.
+Generating, storing and reading fire-risk predictions (`prediction` table).
 
-Predictions are written here after each run so the dashboard can read them
-back instantly, so there is an offline fallback when Open-Meteo or the model
-is unavailable, and so past predictions can later be compared against what
-FIRMS actually detected.
+Predictions are computed once per forecast run (Scripts/fetch_weather_live.py
+or POST /predictions/refresh) and the dashboard reads them back with a single
+indexed query -- no feature engineering or model inference per request.
 """
 
-import threading
-from datetime import date as date_type, datetime, timedelta, timezone
-from typing import Optional
+from datetime import date as date_type
+from typing import Callable, Optional
 
 import pandas as pd
-from sqlalchemy import delete, func, select
+from sqlalchemy import text
 
-from backend.database import SessionLocal, engine
-from backend.db_model.firePrediction import FirePrediction
-
-# SQLite allows concurrent readers but not concurrent writers.
-_write_lock = threading.Lock()
+from backend.api.weather import WEATHER_VARS, utc_now
+from backend.database import engine, write_lock
+from Scripts.prediction_engine import (
+    DAILY_PEAK_COLS, load_model_bundle, model_version, predict_from_features, round_to_grid,
+)
 
 PREDICTION_INSERT_COLS = [
-    "lat_round", "lon_round", "acq_date",
-    "temperature_2m", "relative_humidity_2m", "wind_speed_10m",
-    "wind_gusts_10m", "wind_direction_10m", "precipitation",
-    "soil_moisture_0_to_7cm", "vapour_pressure_deficit",
-    "et0_fao_evapotranspiration",
-    "ffdi", "kbdi", "drought_factor", "kbdi_spinup_flag",
-    "days_since_rain", "days_since_cell_start",
-    "fire_probability", "fire_predicted", "risk_level",
-    "predicted_at", "model_version",
+    "weather_id", "run_id", "cell_id", "date", "lead_days", "fire_probability",
+    "fire_predicted", "risk_level", "threshold", "model_version", "predicted_at",
+    "is_current",
 ]
+VALID_RISK_LEVELS = ("Low", "Moderate", "High", "Extreme")
 
 
-def save_predictions(
-    df: pd.DataFrame,
-    model_version: Optional[str] = None,
-    replace_existing: bool = True,
-) -> int:
+def predict_run(run_id: int, log: Callable[[str], None] = print) -> int:
     """
-    Saves prediction rows produced by backend.prediction_engine.predict_live().
+    Predicts every feature row of a forecast run with the current model, then
+    makes those predictions the current ones for their cell-days.
 
-    A re-run supersedes the previous prediction for the same (cell, day)
-    rather than adding a second row -- otherwise the unique constraint would
-    reject the write, and the dashboard would have no way to tell which of
-    two rows is current.
-
-    Args:
-        df (pd.DataFrame): Predictions, using the engine's OUTPUT_COLS.
-        model_version (str, optional): Identifier for the model that produced
-                                       these rows, stored for audit.
-        replace_existing (bool): If True (default), removes any existing
-                                 prediction for each (cell, day) in `df`
-                                 before inserting.
+    Safe to call again: rows this model already predicted are skipped, and a
+    retrained model (new model_version) adds its own rows next to the old
+    ones instead of overwriting them.
 
     Returns:
-        int: Number of rows inserted.
+        Number of prediction rows written.
     """
-    if df.empty:
-        return 0
+    version = model_version()
+    bundle = load_model_bundle()
+    weather_cols = ", ".join(f"w.{v}" for v in WEATHER_VARS + DAILY_PEAK_COLS)
+    with engine.connect() as conn:
+        df = pd.read_sql(text(f"""
+            SELECT f.*, {weather_cols}, g.lat_round, g.lon_round, w.run_id, r.issued_at
+            FROM feature_engineered f
+            JOIN weather_daily w ON w.weather_id = f.weather_id
+            JOIN grid_cell g ON g.cell_id = f.cell_id
+            JOIN fetch_run r ON r.run_id = w.run_id
+            WHERE w.run_id = :run
+              AND NOT EXISTS (SELECT 1 FROM prediction p
+                              WHERE p.weather_id = f.weather_id AND p.model_version = :mv)
+        """), conn, params={"run": run_id, "mv": version})
 
-    required = ["lat_round", "lon_round", "acq_date", "fire_probability", "risk_level"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Cannot save predictions, missing columns: {missing}")
+    n = 0
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+        pred = predict_from_features(df, bundle)
+        pred["lead_days"] = (pred["date"] - pd.to_datetime(pred["issued_at"]).dt.normalize()).dt.days
+        pred["date"] = pred["date"].dt.strftime("%Y-%m-%d")
+        pred["risk_level"] = pred["risk_level"].astype(str)
+        pred["threshold"] = float(bundle.get("threshold_f1_optimal", 0.5))
+        pred["model_version"] = version
+        pred["predicted_at"] = utc_now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        pred["is_current"] = 0
+        rows = list(pred[PREDICTION_INSERT_COLS].astype(object).itertuples(index=False, name=None))
+        n = len(rows)
+    else:
+        rows = []
 
-    out = df.copy()
-    out["acq_date"] = pd.to_datetime(out["acq_date"]).dt.date
-    out["risk_level"] = out["risk_level"].astype(str)
-    out["kbdi_spinup_flag"] = out["kbdi_spinup_flag"].astype(bool)
-    out["fire_predicted"] = out["fire_predicted"].astype(int)
-    out["predicted_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
-    out["model_version"] = model_version
-
-    cols = [c for c in PREDICTION_INSERT_COLS if c in out.columns]
-    out = out[cols]
-
-    with _write_lock:
-        if replace_existing:
-            keys = out[["lat_round", "lon_round", "acq_date"]].drop_duplicates()
-            with engine.begin() as conn:
-                for row in keys.itertuples(index=False):
-                    conn.execute(
-                        delete(FirePrediction).where(
-                            FirePrediction.lat_round == float(row.lat_round),
-                            FirePrediction.lon_round == float(row.lon_round),
-                            FirePrediction.acq_date == row.acq_date,
-                        )
-                    )
-        out.to_sql(FirePrediction.__tablename__, engine, if_exists="append", index=False)
-
-    return len(out)
+    sql = (f"INSERT INTO prediction ({', '.join(PREDICTION_INSERT_COLS)}) "
+           f"VALUES ({', '.join('?' * len(PREDICTION_INSERT_COLS))})")
+    with write_lock, engine.begin() as conn:
+        if rows:
+            conn.exec_driver_sql(sql, rows)
+        # Hand "current" over to this run for the cell-days it covers -- but
+        # never take it from a NEWER run (e.g. when re-predicting an old run).
+        conn.execute(text("""
+            UPDATE prediction SET is_current = 0
+            WHERE is_current = 1 AND run_id <= :run
+              AND EXISTS (SELECT 1 FROM prediction n
+                          WHERE n.run_id = :run AND n.model_version = :mv
+                            AND n.cell_id = prediction.cell_id AND n.date = prediction.date)
+        """), {"run": run_id, "mv": version})
+        conn.execute(text("""
+            UPDATE prediction SET is_current = 1
+            WHERE run_id = :run AND model_version = :mv
+              AND NOT EXISTS (SELECT 1 FROM prediction c
+                              WHERE c.is_current = 1 AND c.cell_id = prediction.cell_id
+                                AND c.date = prediction.date)
+        """), {"run": run_id, "mv": version})
+    log(f"Predictions: {n:,} written for run {run_id} (model {version}).")
+    return n
 
 
-def get_stored_predictions(
+def get_current_predictions(
     start_date: Optional[date_type] = None,
     end_date: Optional[date_type] = None,
     risk_level: Optional[str] = None,
@@ -103,106 +103,79 @@ def get_stored_predictions(
     limit: Optional[int] = None,
 ) -> pd.DataFrame:
     """
-    Reads stored predictions back, highest fire probability first.
+    The current prediction for each (cell, day), highest probability first,
+    with the headline weather and fire-danger values joined back in.
 
-    All filters are optional; with none supplied this returns every stored
-    prediction. This is the read path the dashboard should use -- it does no
-    model inference and no API calls, so it stays fast and works offline.
-
-    Args:
-        start_date (date, optional): Only predictions for this date onward.
-        end_date (date, optional): Only predictions up to this date.
-        risk_level (str, optional): One of Low, Moderate, High, Extreme.
-        latitude (float, optional): Grid cell latitude (already grid-rounded).
-        longitude (float, optional): Grid cell longitude (already grid-rounded).
-        limit (int, optional): Cap the number of rows returned.
-
-    Returns:
-        pd.DataFrame: Stored predictions, or an empty DataFrame if none match.
+    All filters are optional. latitude/longitude are raw coordinates and are
+    snapped to the grid.
     """
-    stmt = select(FirePrediction)
-
+    where, params = ["p.is_current = 1"], {}
     if start_date is not None:
-        stmt = stmt.where(FirePrediction.acq_date >= start_date)
+        where.append("p.date >= :start")
+        params["start"] = str(start_date)
     if end_date is not None:
-        stmt = stmt.where(FirePrediction.acq_date <= end_date)
+        where.append("p.date <= :end")
+        params["end"] = str(end_date)
     if risk_level is not None:
-        stmt = stmt.where(FirePrediction.risk_level == risk_level)
+        where.append("p.risk_level = :risk")
+        params["risk"] = risk_level
     if latitude is not None and longitude is not None:
-        stmt = stmt.where(
-            FirePrediction.lat_round == latitude,
-            FirePrediction.lon_round == longitude,
-        )
-
-    stmt = stmt.order_by(FirePrediction.fire_probability.desc())
+        where.append("g.lat_round = :lat AND g.lon_round = :lon")
+        params["lat"], params["lon"] = round_to_grid(latitude), round_to_grid(longitude)
+    sql = f"""
+        SELECT g.lat_round, g.lon_round, p.date AS acq_date,
+               w.temperature_2m, w.relative_humidity_2m, w.wind_speed_10m,
+               f.ffdi, f.kbdi, f.drought_factor, f.kbdi_spinup_flag,
+               p.fire_probability, p.fire_predicted, p.risk_level,
+               p.lead_days, p.run_id, p.model_version, p.predicted_at
+        FROM prediction p
+        JOIN feature_engineered f ON f.weather_id = p.weather_id
+        JOIN weather_daily w ON w.weather_id = p.weather_id
+        JOIN grid_cell g ON g.cell_id = p.cell_id
+        WHERE {' AND '.join(where)}
+        ORDER BY p.fire_probability DESC
+    """
     if limit is not None:
-        stmt = stmt.limit(limit)
+        sql += " LIMIT :limit"
+        params["limit"] = int(limit)
+    with engine.connect() as conn:
+        df = pd.read_sql(text(sql), conn, params=params)
+    df["acq_date"] = pd.to_datetime(df["acq_date"]).dt.date
+    df["kbdi_spinup_flag"] = df["kbdi_spinup_flag"].astype(bool)
+    return df
 
-    db = SessionLocal()
-    try:
-        return pd.read_sql(stmt, db.bind)
-    finally:
-        db.close()
 
-
-def get_latest_predictions(limit: Optional[int] = None) -> pd.DataFrame:
+def prune_forecasts(keep_days: int = 90, log: Callable[[str], None] = print) -> dict:
     """
-    Returns predictions from the most recent run only.
+    Deletes forecast runs issued more than `keep_days` ago, except the rows
+    that still back a current prediction. Archive rows are never touched.
 
-    Filtering on the latest `predicted_at` avoids mixing a fresh run with
-    leftovers from an older one, which would otherwise show contradictory
-    risk levels for the same area on the map.
-
-    Args:
-        limit (int, optional): Cap the number of rows returned.
-
-    Returns:
-        pd.DataFrame: Predictions from the latest run, highest probability first.
+    Superseded predictions are what lead-time accuracy is measured on, so
+    only prune after you have evaluated them.
     """
-    db = SessionLocal()
-    try:
-        latest_run = db.query(func.max(FirePrediction.predicted_at)).scalar()
-        if latest_run is None:
-            return pd.DataFrame()
-
-        # Predictions written by one run share a timestamp only to the
-        # microsecond, so allow a small window rather than exact equality.
-        window_start = latest_run - timedelta(minutes=5)
-        stmt = (
-            select(FirePrediction)
-            .where(FirePrediction.predicted_at >= window_start)
-            .order_by(FirePrediction.fire_probability.desc())
-        )
-        if limit is not None:
-            stmt = stmt.limit(limit)
-        return pd.read_sql(stmt, db.bind)
-    finally:
-        db.close()
-
-
-def delete_stale_predictions(older_than_days: int = 30) -> int:
-    """
-    Removes predictions older than the cutoff, based on when they were made.
-
-    Args:
-        older_than_days (int): Age cutoff in days. Defaults to 30.
-
-    Returns:
-        int: Number of rows deleted.
-    """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).replace(tzinfo=None)
-    with _write_lock:
-        with engine.begin() as conn:
-            result = conn.execute(
-                delete(FirePrediction).where(FirePrediction.predicted_at < cutoff)
-            )
-    return result.rowcount or 0
-
-
-def count_predictions() -> int:
-    """Total number of rows currently in the fire_prediction table."""
-    db = SessionLocal()
-    try:
-        return db.query(func.count(FirePrediction.id)).scalar() or 0
-    finally:
-        db.close()
+    # Same format as the stored issued_at (with microseconds), so the string
+    # comparison is exact.
+    cutoff = (pd.Timestamp(utc_now()) - pd.Timedelta(days=keep_days)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    old = "SELECT run_id FROM fetch_run WHERE source = 'forecast' AND issued_at < :cutoff"
+    with write_lock, engine.begin() as conn:
+        n_pred = conn.execute(text(
+            f"DELETE FROM prediction WHERE is_current = 0 AND run_id IN ({old})"
+        ), {"cutoff": cutoff}).rowcount
+        n_feat = conn.execute(text(f"""
+            DELETE FROM feature_engineered WHERE source = 'forecast'
+              AND weather_id IN (SELECT weather_id FROM weather_daily WHERE run_id IN ({old}))
+              AND NOT EXISTS (SELECT 1 FROM prediction p WHERE p.weather_id = feature_engineered.weather_id)
+        """), {"cutoff": cutoff}).rowcount
+        n_weather = conn.execute(text(f"""
+            DELETE FROM weather_daily WHERE source = 'forecast' AND run_id IN ({old})
+              AND NOT EXISTS (SELECT 1 FROM feature_engineered f WHERE f.weather_id = weather_daily.weather_id)
+        """), {"cutoff": cutoff}).rowcount
+        n_runs = conn.execute(text(f"""
+            DELETE FROM fetch_run WHERE run_id IN ({old})
+              AND NOT EXISTS (SELECT 1 FROM weather_daily w WHERE w.run_id = fetch_run.run_id)
+              AND NOT EXISTS (SELECT 1 FROM prediction p WHERE p.run_id = fetch_run.run_id)
+        """), {"cutoff": cutoff}).rowcount
+    counts = {"prediction": n_pred, "feature_engineered": n_feat,
+              "weather_daily": n_weather, "fetch_run": n_runs}
+    log(f"Pruned forecasts issued before {cutoff}: {counts}")
+    return counts

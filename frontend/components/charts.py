@@ -307,7 +307,7 @@ def render_risk_distribution(summary: Dict) -> None:
 # ----------------------------------------------------------------------------
 # 4. MODEL FACTOR WEIGHTS
 # ----------------------------------------------------------------------------
-# The model uses 19 engineered inputs; most are unreadable to a non-specialist
+# The model uses ~27 engineered inputs; most are unreadable to a non-specialist
 # ("et0_fao_evapotranspiration", "month_cos"). They are grouped into the
 # handful of factors a user would recognise, and the chart shows each group's
 # summed share. Hovering a bar lists the underlying features.
@@ -322,15 +322,34 @@ FACTOR_GROUPS = [
             "drought_factor",
             "precipitation",
             "et0_fao_evapotranspiration",
+            "et0_fao_evapotranspiration_sum",
         ],
     ),
     (
         "Heat & air dryness",
-        ["temperature_2m", "relative_humidity_2m", "vapour_pressure_deficit", "emc"],
+        [
+            "temperature_2m",
+            "temperature_2m_max",
+            "relative_humidity_2m",
+            "relative_humidity_2m_min",
+            "vapour_pressure_deficit",
+            "vapour_pressure_deficit_max",
+            "emc",
+        ],
     ),
     ("Season", ["month_sin", "month_cos"]),
-    ("Wind", ["wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"]),
-    ("Fire danger indices", ["ffdi", "rate_of_spread"]),
+    (
+        "Wind",
+        [
+            "wind_speed_10m",
+            "wind_speed_10m_max",
+            "wind_gusts_10m",
+            "wind_gusts_10m_max",
+            "wind_direction_10m",
+            "wind_direction_at_max_wind",
+        ],
+    ),
+    ("Fire danger indices", ["ffdi", "ffdi_max", "rate_of_spread"]),
 ]
 
 FEATURE_LABELS = {
@@ -342,16 +361,24 @@ FEATURE_LABELS = {
     "drought_factor": "Drought factor",
     "precipitation": "Rainfall",
     "et0_fao_evapotranspiration": "Evapotranspiration",
+    "et0_fao_evapotranspiration_sum": "Evapotranspiration (daily total)",
     "temperature_2m": "Temperature",
+    "temperature_2m_max": "Max temperature",
     "relative_humidity_2m": "Humidity",
+    "relative_humidity_2m_min": "Min humidity",
     "vapour_pressure_deficit": "Vapour pressure deficit",
+    "vapour_pressure_deficit_max": "Max vapour pressure deficit",
     "emc": "Fuel moisture (EMC)",
     "month_sin": "Month (sin)",
     "month_cos": "Month (cos)",
     "wind_speed_10m": "Wind speed",
+    "wind_speed_10m_max": "Max wind speed",
     "wind_gusts_10m": "Wind gusts",
+    "wind_gusts_10m_max": "Strongest gust",
     "wind_direction_10m": "Wind direction",
+    "wind_direction_at_max_wind": "Wind direction (strongest wind)",
     "ffdi": "FFDI",
+    "ffdi_max": "Peak FFDI",
     "rate_of_spread": "Rate of spread",
 }
 

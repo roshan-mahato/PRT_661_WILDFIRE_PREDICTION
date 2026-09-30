@@ -235,3 +235,17 @@ chat_session/raw_firms_data/
 *.sqlite3
 
 data/old_data_unnecessary
+data/full_grid_parts
+data/full_grid_parts/*
+data/full_grid_parts_v2
+data/full_grid_parts_v2/*
+data/old_data
+data/old_data/*
+# Files no longer used by the pipeline (kept locally for reference)
+not_using/
+# SQLite side files (the database itself is ignored by *.db)
+*.db-shm
+*.db-wal
+# Raw FIRMS downloads (200+ MB each, over GitHub's 100 MB limit); everything
+# in them is in data/firms_combined.csv -- rebuild with Scripts/combine_firms.py
+data/DL_FIRE_*/

@@ -1,20 +1,19 @@
 """
 prediction_engine.py
 ================================================================================
-Pure feature-engineering and model-inference functions for live fire-risk
-prediction. No DB access here -- this module only knows how to turn raw
-hourly weather rows into a fire-risk prediction. Fetching the weather rows
-is the job of backend/api/prediction.py.
+Pure feature-engineering and model-inference functions for fire-risk
+prediction. No DB access here -- this module only knows how to turn daily
+weather rows into features and features into a prediction. Reading and
+writing the weather_daily / feature_engineered / prediction tables is the job
+of backend/api/features.py and backend/api/fire_prediction.py.
 
-This is the SAME logic as Scripts/predict_live_fire_risk.py (kept there as
-a standalone CLI entry point for ad-hoc CSV runs); the formulas must stay
-identical to what the model was trained on, so both call into this module
-rather than each keeping their own copy.
+The formulas must stay identical to what the model was trained on, so the
+training pipeline (build_labeled_dataset.py) imports them from here too.
 ================================================================================
 """
+import hashlib
 import json
 import os
-import threading
 from functools import lru_cache
 
 import joblib
@@ -23,13 +22,13 @@ import pandas as pd
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(REPO_ROOT, "models", "best_fire_model.joblib")
-STATE_PATH = os.path.join(REPO_ROOT, "Scripts", "fire_state.json")
+MODEL_METADATA_PATH = os.path.join(REPO_ROOT, "models", "best_fire_model_metadata.json")
 
 MEAN_ANNUAL_RAINFALL_MM = 700.0  # same constant as the training pipeline
 FIXED_FUEL_LOAD_T_HA = 8.0
 KBDI_SPINUP_DAYS = 30
 GRID_SIZE_DEGREES = 0.5
-DAILY_CACHE_MAX_DAYS = 60  # per-cell replay cache; live window is only 7 days
+DAILY_CACHE_MAX_DAYS = 60  # kbdi_df_step replay cache (training pipeline only)
 
 WEATHER_COLS = [
     "temperature_2m", "relative_humidity_2m", "wind_speed_10m", "wind_gusts_10m",
@@ -38,6 +37,33 @@ WEATHER_COLS = [
 ]
 
 CRITICAL_WEATHER_COLS = ["temperature_2m", "relative_humidity_2m", "wind_speed_10m"]
+
+# Daily extremes of the hourly series. Fire weather peaks in the afternoon and
+# a daily mean hides it (a 38C / 8% RH afternoon can average 28C / 30%). They
+# are stored NEXT TO the means, which the current model was trained on.
+DAILY_EXTREME_AGG = {
+    "temperature_2m_max": ("temperature_2m", "max"),
+    "relative_humidity_2m_min": ("relative_humidity_2m", "min"),
+    "wind_speed_10m_max": ("wind_speed_10m", "max"),
+    "wind_gusts_10m_max": ("wind_gusts_10m", "max"),
+    "vapour_pressure_deficit_max": ("vapour_pressure_deficit", "max"),
+    "et0_fao_evapotranspiration_sum": ("et0_fao_evapotranspiration", "sum"),   # mm/day
+}
+# Conditions at ONE hour: the hour with the highest FFDI. The separate maxima
+# above can come from different hours (hottest at 3pm, windiest at 8am);
+# FFDI needs temperature, humidity and wind that happened together.
+PEAK_HOUR_COLS = [
+    "peak_fire_hour_utc", "peak_fire_temperature_2m",
+    "peak_fire_relative_humidity_2m", "peak_fire_wind_speed_10m",
+    # A plain mean of angles is wrong (350 and 10 average to 180), so the
+    # direction is taken at the windiest hour instead.
+    "wind_direction_at_max_wind",
+]
+DAILY_PEAK_COLS = list(DAILY_EXTREME_AGG) + PEAK_HOUR_COLS
+
+# Model inputs built from the columns above (used once a model is retrained
+# on them; peak_fire_hour_utc is left out because it mostly encodes longitude).
+PEAK_FEATURES = list(DAILY_EXTREME_AGG) + ["wind_direction_at_max_wind", "ffdi_max"]
 
 # Physical bounds from the training pipeline (wildfire_data_pipeline_full.ipynb,
 # handle_outliers tier 1). Readings outside these are data errors, not extreme
@@ -95,12 +121,76 @@ def compute_ros(ffdi):
     return 0.0012 * ffdi * FIXED_FUEL_LOAD_T_HA
 
 
+def ffdi_weather_term(temp_c, rh, wind_kmh):
+    """
+    The hourly part of FFDI. The Drought Factor is one value per day, so the
+    hour with the largest term is the hour with the largest FFDI.
+    """
+    return -0.0345 * rh + 0.0338 * temp_c + 0.0234 * wind_kmh
+
+
+def daily_peaks(hourly: pd.DataFrame, keys: list) -> pd.DataFrame:
+    """
+    Hourly rows -> DAILY_PEAK_COLS per (keys..., UTC day).
+
+    Args:
+        hourly: a `datetime_utc` column, the `keys` columns and the hourly
+                weather variables.
+        keys:   columns identifying a cell (may be empty for one cell).
+
+    Returns:
+        keys + acq_date (timezone-naive midnight) + DAILY_PEAK_COLS. A day
+        with a missing hour gets values from the hours it has; callers that
+        need complete days drop those days themselves.
+    """
+    h = hourly.reset_index(drop=True).copy()
+    t = pd.to_datetime(h["datetime_utc"], utc=True)
+    h["acq_date"] = t.dt.tz_localize(None).dt.floor("D")
+    h["_hour"] = t.dt.hour
+    by = keys + ["acq_date"]
+    g = h.groupby(by)
+
+    out = pd.DataFrame({
+        name: (g[col].sum(min_count=1) if fn == "sum" else g[col].agg(fn))
+        for name, (col, fn) in DAILY_EXTREME_AGG.items()
+    })
+
+    # Row of the peak FFDI hour and of the windiest hour, per day. NaN terms
+    # are pushed to -inf so an all-NaN day still returns a row (with NaNs).
+    term = ffdi_weather_term(h["temperature_2m"], h["relative_humidity_2m"], h["wind_speed_10m"])
+    at_peak = h.loc[term.fillna(-np.inf).groupby([h[k] for k in by]).idxmax().to_numpy()]
+    at_wind = h.loc[h["wind_speed_10m"].fillna(-np.inf).groupby([h[k] for k in by]).idxmax().to_numpy()]
+    out["peak_fire_hour_utc"] = at_peak["_hour"].to_numpy()
+    out["peak_fire_temperature_2m"] = at_peak["temperature_2m"].to_numpy()
+    out["peak_fire_relative_humidity_2m"] = at_peak["relative_humidity_2m"].to_numpy()
+    out["peak_fire_wind_speed_10m"] = at_peak["wind_speed_10m"].to_numpy()
+    out["wind_direction_at_max_wind"] = at_wind["wind_direction_10m"].to_numpy()
+    return out.reset_index()
+
+
+def compute_ffdi_max(daily: pd.DataFrame) -> np.ndarray:
+    """
+    FFDI at the day's peak fire-weather hour. Always >= the FFDI of the daily
+    means (the term is linear, so its maximum is at least its mean). NaN
+    where the peak-hour columns are missing (rows stored before they existed).
+    """
+    cols = ["peak_fire_temperature_2m", "peak_fire_relative_humidity_2m", "peak_fire_wind_speed_10m"]
+    if not all(c in daily.columns for c in cols):
+        return np.full(len(daily), np.nan)
+    return compute_ffdi(daily[cols[0]].to_numpy(float), daily[cols[1]].to_numpy(float),
+                        daily[cols[2]].to_numpy(float), daily["drought_factor"].to_numpy(float))
+
+
 def kbdi_df_step(state, date, temp_c, rain_mm):
     """
     Advances ONE grid cell's KBDI / Drought Factor recursion by one day,
     given its saved `state` (or a fresh cold-start state for a new cell).
     Mirrors compute_kbdi_and_df() from the training pipeline exactly, but
     operating one day at a time against persisted state.
+
+    This is the reference implementation, used by the training pipeline.
+    run_kbdi() below is the same recursion advanced for every cell at once;
+    tests/test_prediction_engine.py checks the two agree.
 
     IDEMPOTENCY: the recursion must advance once per cell-day and no more.
     A day already computed is served from `daily_cache` instead of being
@@ -183,28 +273,157 @@ def kbdi_df_step(state, date, temp_c, rain_mm):
 
 
 # ==============================================================================
-# State persistence (per grid-cell KBDI recursion memory across API calls)
+# The same recursion for every cell at once
 # ==============================================================================
-# fire_state.json is shared mutable state. FastAPI runs sync endpoints in a
-# threadpool, so two requests can land here at once -- without this lock, one
-# request's KBDI state could overwrite the other's.
-_state_lock = threading.Lock()
+# A feature row carries everything needed to continue the recursion the next
+# day, so the recursion state is simply "the cell's latest feature row":
+#   q_prev -> kbdi, n_dry_days -> days_since_rain, last_date -> date,
+#   cell_start_date -> date - days_since_cell_start, plus the three columns
+# below that only exist to carry the rain-event state forward.
+KBDI_EVENT_STATE_COLS = ["last_rain_amt", "in_rain_event", "event_cumulative_rain"]
+KBDI_RESULT_COLS = [
+    "kbdi", "drought_factor", "days_since_rain", "days_since_cell_start",
+    "kbdi_spinup_flag",
+] + KBDI_EVENT_STATE_COLS
 
 
-def load_state() -> dict:
-    if os.path.exists(STATE_PATH):
-        with open(STATE_PATH) as f:
-            return json.load(f)
-    return {}
+def _day_number(dates) -> np.ndarray:
+    return pd.to_datetime(pd.Series(dates)).to_numpy("datetime64[D]").astype(np.int64)
 
 
-def save_state(all_state: dict) -> None:
-    with open(STATE_PATH, "w") as f:
-        json.dump(all_state, f, indent=2)
+def run_kbdi(daily: pd.DataFrame, start_state: pd.DataFrame | None = None) -> pd.DataFrame:
+    """
+    Runs the KBDI / Drought Factor recursion of kbdi_df_step() over many
+    cells at once: the loop is over days, and each day advances every cell
+    that has a row that day as one numpy operation.
+
+    Args:
+        daily: one row per (cell_id, date) with temperature_2m and
+               precipitation. Any order; a cell may have a gap (the gap is
+               treated as rain-free days, as kbdi_df_step does).
+        start_state: optional, one row per cell_id -- that cell's latest
+               feature row (date, kbdi, days_since_rain, days_since_cell_start
+               and KBDI_EVENT_STATE_COLS). Cells without one cold-start.
+               Every row of `daily` must be after its cell's state date.
+
+    Returns:
+        `daily` (same index and order) with KBDI_RESULT_COLS added.
+    """
+    out = daily.copy()
+    if out.empty:
+        for c in KBDI_RESULT_COLS:
+            out[c] = pd.Series(dtype=float)
+        return out
+
+    cells = pd.Index(out["cell_id"].unique())
+    n = len(cells)
+    q = np.zeros(n)
+    n_dry = np.zeros(n)
+    last_rain = np.zeros(n)
+    in_event = np.zeros(n, dtype=bool)
+    event_cum = np.zeros(n)
+    start_day = np.full(n, -1, dtype=np.int64)   # -1 = no state yet (cold start)
+    last_day = np.full(n, -1, dtype=np.int64)
+
+    if start_state is not None and not start_state.empty:
+        s = start_state[start_state["cell_id"].isin(cells)]
+        p = cells.get_indexer(s["cell_id"])
+        s_day = _day_number(s["date"])
+        q[p] = s["kbdi"].to_numpy(float)
+        n_dry[p] = s["days_since_rain"].to_numpy(float)
+        last_rain[p] = s["last_rain_amt"].to_numpy(float)
+        in_event[p] = s["in_rain_event"].to_numpy(bool)
+        event_cum[p] = s["event_cumulative_rain"].to_numpy(float)
+        last_day[p] = s_day
+        start_day[p] = s_day - s["days_since_cell_start"].to_numpy(np.int64)
+
+    day = _day_number(out["date"])
+    pos = cells.get_indexer(out["cell_id"])
+    temp = out["temperature_2m"].to_numpy(float)
+    rain = np.nan_to_num(out["precipitation"].to_numpy(float), nan=0.0)
+
+    res = {c: np.empty(len(out)) for c in KBDI_RESULT_COLS}
+    denom = 1 + 10.88 * np.exp(-0.001736 * MEAN_ANNUAL_RAINFALL_MM)
+
+    order = np.argsort(day, kind="stable")
+    days, first = np.unique(day[order], return_index=True)
+    bounds = list(first) + [len(order)]
+    for i, d in enumerate(days):
+        rows = order[bounds[i]:bounds[i + 1]]
+        p = pos[rows]
+        if len(np.unique(p)) != len(p):
+            raise ValueError(f"run_kbdi: a cell has two rows on day {np.datetime64(int(d), 'D')}")
+        known = last_day[p] >= 0
+        if np.any(known & (last_day[p] >= d)):
+            raise ValueError("run_kbdi: a row is not after its cell's start_state date")
+
+        r, t = rain[rows], temp[rows]
+        cold = start_day[p] < 0
+        start_day[p[cold]] = d
+        dt = np.where(known, np.maximum(d - last_day[p], 1), 1).astype(float)
+
+        # Rain-event bookkeeping, exactly as kbdi_df_step.
+        wet = r > 0
+        was_in = in_event[p]
+        new_event = wet & ~was_in
+        end_event = ~wet & was_in
+        net_rain = np.where(new_event, np.maximum(r - 5.0, 0.0), np.where(wet, r, 0.0))
+        last_rain[p] = np.where(end_event, event_cum[p], last_rain[p])
+        event_cum[p] = np.where(new_event, r,
+                                np.where(wet, event_cum[p] + r,
+                                         np.where(end_event, 0.0, event_cum[p])))
+        in_event[p] = wet | (was_in & ~end_event)
+
+        q_after = np.maximum(q[p] - net_rain * 10, 0.0)
+        dq = ((203.2 - q_after) * (0.968 * np.exp(0.0875 * t + 1.5552) - 8.30) * dt
+              / denom) * 1e-3
+        q_new = np.minimum(q_after + np.maximum(dq, 0.0), 203.2)
+
+        n_dry[p] = np.where(r >= 2.0, 0.0, n_dry[p] + dt)
+        N = np.maximum(n_dry[p], 0.0)
+        P = np.maximum(last_rain[p], 1.0)
+        df_val = (0.191 * (q_new + 104) * (N + 1) ** 1.5) / (3.52 * (N + 1) ** 1.5 + P - 1)
+
+        q[p] = q_new
+        last_day[p] = d
+        since_start = d - start_day[p]
+
+        res["kbdi"][rows] = q_new
+        res["drought_factor"][rows] = np.clip(df_val, 0.0, 10.0)
+        res["days_since_rain"][rows] = n_dry[p]
+        res["days_since_cell_start"][rows] = since_start
+        res["kbdi_spinup_flag"][rows] = since_start < KBDI_SPINUP_DAYS
+        res["last_rain_amt"][rows] = last_rain[p]
+        res["in_rain_event"][rows] = in_event[p]
+        res["event_cumulative_rain"][rows] = event_cum[p]
+
+    for c, v in res.items():
+        out[c] = v
+    for c in ("kbdi_spinup_flag", "in_rain_event"):
+        out[c] = out[c].astype(bool)
+    out["days_since_cell_start"] = out["days_since_cell_start"].astype(np.int64)
+    return out
 
 
-def cell_key(lat, lon) -> str:
-    return f"{lat}_{lon}"
+def add_fire_danger_features(daily: pd.DataFrame) -> pd.DataFrame:
+    """Adds the same-day features (EMC, FFDI, Rate of Spread, cyclical month)."""
+    daily = daily.copy()
+    rh = daily["relative_humidity_2m"].to_numpy(float)
+    temp = daily["temperature_2m"].to_numpy(float)
+    daily["emc"] = compute_emc(rh, temp)
+    daily["ffdi"] = compute_ffdi(temp, rh, daily["wind_speed_10m"].to_numpy(float),
+                                 daily["drought_factor"].to_numpy(float))
+    daily["rate_of_spread"] = compute_ros(daily["ffdi"])
+    daily["ffdi_max"] = compute_ffdi_max(daily)
+    month = pd.to_datetime(daily["date"]).dt.month
+    daily["month_sin"] = np.sin(2 * np.pi * month / 12)
+    daily["month_cos"] = np.cos(2 * np.pi * month / 12)
+    return daily
+
+
+def engineer_features(daily: pd.DataFrame, start_state: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Daily weather -> every model feature. See run_kbdi() for the arguments."""
+    return add_fire_danger_features(run_kbdi(daily, start_state))
 
 
 def drop_implausible_readings(raw_df: pd.DataFrame) -> tuple:
@@ -245,7 +464,8 @@ def aggregate_to_daily(raw_df: pd.DataFrame) -> pd.DataFrame:
     Aggregates raw hourly weather rows to one row per (lat_round, lon_round,
     acq_date). Precipitation is SUMMED (accumulation); everything else is
     averaged (snapshot variables) -- identical to the training pipeline's
-    aggregate_to_daily() / build_daily_weather_series().
+    aggregate_to_daily() / build_daily_weather_series(). With all hourly
+    variables present, DAILY_PEAK_COLS are added too (see daily_peaks()).
 
     Expects `raw_df` to already have `lat_round`, `lon_round`, and
     `datetime_utc` columns.
@@ -263,6 +483,10 @@ def aggregate_to_daily(raw_df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+    if all(c in df.columns for c in WEATHER_COLS):
+        daily = daily.merge(daily_peaks(df, ["lat_round", "lon_round"]),
+                            on=["lat_round", "lon_round", "acq_date"], how="left")
+
     critical = [c for c in CRITICAL_WEATHER_COLS if c in daily.columns]
     daily = daily[~daily[critical].isna().any(axis=1)].reset_index(drop=True)
     daily["precipitation"] = daily.get("precipitation", 0.0)
@@ -271,48 +495,7 @@ def aggregate_to_daily(raw_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==============================================================================
-# Step 2: daily weather -> fire-danger features (stateful KBDI recursion)
-# ==============================================================================
-def engineer_daily_features(daily: pd.DataFrame) -> pd.DataFrame:
-    """
-    Adds KBDI, Drought Factor, EMC, FFDI, Rate of Spread, and cyclical month
-    features to a (grid cell, day) weather DataFrame. Loads and saves the
-    persisted per-cell KBDI state (fire_state.json) so the recursion
-    continues correctly across separate calls/days.
-    """
-    daily = daily.copy()
-    # The whole read-recurse-write cycle is held under one lock: loading and
-    # saving separately would let a concurrent request read stale state.
-    with _state_lock:
-        all_state = load_state()
-        kbdi_rows = []
-        for _, row in daily.iterrows():
-            key = cell_key(row["lat_round"], row["lon_round"])
-            cell_state = all_state.get(key)
-            result, cell_state = kbdi_df_step(
-                cell_state, row["acq_date"], row["temperature_2m"], row["precipitation"]
-            )
-            all_state[key] = cell_state
-            kbdi_rows.append(result)
-        save_state(all_state)
-
-    kbdi_df = pd.DataFrame(kbdi_rows)
-    for c in kbdi_df.columns:
-        daily[c] = kbdi_df[c].values
-
-    daily["emc"] = compute_emc(daily["relative_humidity_2m"], daily["temperature_2m"])
-    daily["ffdi"] = compute_ffdi(daily["temperature_2m"], daily["relative_humidity_2m"],
-                                  daily["wind_speed_10m"], daily["drought_factor"])
-    daily["rate_of_spread"] = compute_ros(daily["ffdi"])
-
-    month = pd.to_datetime(daily["acq_date"]).dt.month
-    daily["month_sin"] = np.sin(2 * np.pi * month / 12)
-    daily["month_cos"] = np.cos(2 * np.pi * month / 12)
-    return daily
-
-
-# ==============================================================================
-# Step 3: engineered features -> model prediction
+# Step 2: engineered features -> model prediction
 # ==============================================================================
 @lru_cache(maxsize=1)
 def load_model_bundle() -> dict:
@@ -322,6 +505,22 @@ def load_model_bundle() -> dict:
     request -- the model doesn't change between requests, so load it once.
     """
     return joblib.load(MODEL_PATH)
+
+
+@lru_cache(maxsize=1)
+def model_version() -> str:
+    """
+    Identifies the model file: its training time plus a short hash of the
+    file, e.g. "2026-09-16T11:15:18-3f2a9c1d". Stored on every prediction, so
+    a retrained model never overwrites the old model's predictions.
+    """
+    with open(MODEL_PATH, "rb") as f:
+        digest = hashlib.md5(f.read()).hexdigest()[:8]
+    trained_at = "unknown"
+    if os.path.exists(MODEL_METADATA_PATH):
+        with open(MODEL_METADATA_PATH) as f:
+            trained_at = json.load(f).get("trained_at", trained_at)
+    return f"{trained_at}-{digest}"
 
 
 def predict_from_features(
@@ -339,7 +538,10 @@ def predict_from_features(
             f"Missing required model features after engineering: {missing_feats}"
         )
 
-    X = daily[features]
+    # A column that is NULL for every row (e.g. peak columns on rows stored
+    # before they existed) comes back from SQL as object dtype, which the
+    # model rejects; as float it is NaN, which LightGBM handles.
+    X = daily[features].apply(pd.to_numeric, errors="coerce").astype(float)
     if bundle.get("scaler") is not None:
         X = pd.DataFrame(
             bundle["scaler"].transform(X), columns=features, index=X.index
@@ -369,51 +571,10 @@ def predict_from_features(
     return daily
 
 
+# Columns the prediction endpoints return, one row per (grid cell, day).
 OUTPUT_COLS = [
     "lat_round", "lon_round", "acq_date", "temperature_2m",
     "relative_humidity_2m", "wind_speed_10m", "ffdi", "kbdi",
     "drought_factor", "kbdi_spinup_flag", "fire_probability",
     "fire_predicted", "risk_level",
 ]
-
-# Extra columns kept for persistence but not returned in the API response.
-# Together with OUTPUT_COLS these cover every feature the model consumes, so a
-# saved row can be replayed through the model to reproduce its probability.
-# They are excluded from the API response to keep the dashboard payload small
-# -- the dashboard shows the headline conditions, not the full feature vector.
-PERSIST_EXTRA_COLS = [
-    "wind_gusts_10m", "wind_direction_10m", "precipitation",
-    "soil_moisture_0_to_7cm", "vapour_pressure_deficit",
-    "et0_fao_evapotranspiration", "days_since_rain", "days_since_cell_start",
-]
-
-PERSIST_COLS = OUTPUT_COLS + PERSIST_EXTRA_COLS
-
-
-def predict_live(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    End-to-end: raw hourly weather rows -> physical-bounds filter -> daily
-    aggregation -> feature engineering -> prediction. This is the single entry
-    point both the CLI script and the backend API should call.
-
-    The step order mirrors the training notebook exactly (handle_outliers ->
-    aggregate_to_daily -> engineer_features), so the same raw input produces
-    the same features the model was trained on.
-    """
-    if raw_df.empty:
-        return pd.DataFrame(columns=PERSIST_COLS)
-
-    raw_df, n_dropped = drop_implausible_readings(raw_df)
-    if n_dropped:
-        print(f"Dropped {n_dropped:,} physically implausible weather reading(s).")
-    if raw_df.empty:
-        return pd.DataFrame(columns=PERSIST_COLS)
-
-    daily = aggregate_to_daily(raw_df)
-    if daily.empty:
-        return pd.DataFrame(columns=PERSIST_COLS)
-
-    daily = engineer_daily_features(daily)
-    daily = predict_from_features(daily)
-    cols = [c for c in PERSIST_COLS if c in daily.columns]
-    return daily[cols].sort_values("fire_probability", ascending=False).reset_index(drop=True)

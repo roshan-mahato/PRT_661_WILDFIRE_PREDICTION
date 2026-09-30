@@ -69,8 +69,8 @@ if load_error:
 
 if predictions.empty and not load_error:
     st.info(
-        "No predictions available yet. Fetch live weather "
-        "(`uv run python Scripts/fetch_openmeteo_live.py`), then press Refresh."
+        "No predictions available yet. Fetch the forecast "
+        "(`uv run python Scripts/fetch_weather_live.py`), which also predicts."
     )
 
 # ---------------------------------------------------------------------------

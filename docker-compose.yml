@@ -5,6 +5,11 @@ services:
         restart: unless-stopped
         ports:
             - '127.0.0.1:8080:8080'
+        # Fixed resolvers: Docker's forwarding to the host resolver goes stale
+        # when the host network changes (Wi-Fi/VPN), and S3 lookups then fail.
+        dns:
+            - 1.1.1.1
+            - 8.8.8.8
         volumes:
             - open-meteo-data:/app/data
         environment:

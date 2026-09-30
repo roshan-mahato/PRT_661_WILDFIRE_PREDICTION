@@ -80,6 +80,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from prediction_engine import PEAK_FEATURES  # noqa: E402
 
 RANDOM_STATE = 42
 
@@ -374,6 +376,16 @@ def sanity_check(model, features: list, threshold: float) -> bool:
     def mk(**kw):
         d = dict(base)
         d.update(kw)
+        # Afternoon peaks consistent with the daily means (hotter, drier and
+        # windier than the average), for models trained with PEAK_FEATURES.
+        d.setdefault("temperature_2m_max", d["temperature_2m"] + 7)
+        d.setdefault("relative_humidity_2m_min", max(d["relative_humidity_2m"] - 20, 5))
+        d.setdefault("wind_speed_10m_max", d["wind_speed_10m"] * 1.6)
+        d.setdefault("wind_gusts_10m_max", d["wind_gusts_10m"] * 1.5)
+        d.setdefault("vapour_pressure_deficit_max", d["vapour_pressure_deficit"] * 1.8)
+        d.setdefault("et0_fao_evapotranspiration_sum", d["et0_fao_evapotranspiration"] * 24)
+        d.setdefault("wind_direction_at_max_wind", d["wind_direction_10m"])
+        d.setdefault("ffdi_max", d["ffdi"] * 2.0)
         return d
 
     profiles = [
@@ -448,6 +460,8 @@ def main():
                         help=f"Drop TRAIN negatives within N days of a fire (default {BUFFER_DAYS}; 0 = off)")
     parser.add_argument("--neg-per-pos", type=float, default=None,
                         help="Subsample TRAIN negatives to this ratio (default: keep all)")
+    parser.add_argument("--no-peak-features", action="store_true",
+                        help="Do not use the daily peak features even if the dataset has them")
     parser.add_argument("--no-save", action="store_true",
                         help="Train and report, but do not write the bundle")
     args = parser.parse_args()
@@ -456,10 +470,15 @@ def main():
     print("=" * 78)
     print("RETRAIN FIRE MODEL")
     print("=" * 78)
-    print(f"Features: {len(features)}"
-          + ("" if args.keep_old_features else f" (dropped: {DROPPED_FEATURES})"))
 
     df = load_dataset(args.input)
+    # Daily peaks (max temp, min RH, peak FFDI, ...) are used when the dataset
+    # was built from weather that has them (fetch_weather_history.py).
+    if not args.no_peak_features and all(c in df.columns for c in PEAK_FEATURES):
+        features = features + PEAK_FEATURES
+        print(f"Using daily peak features: {PEAK_FEATURES}")
+    print(f"Features: {len(features)}"
+          + ("" if args.keep_old_features else f" (dropped: {DROPPED_FEATURES})"))
     df, X, y = build_features(df, features)
     splits = temporal_split(df, X, y)
     df_train, X_train, y_train = splits["train"]

@@ -1,22 +1,24 @@
 """
-FastAPI routes for live fire-risk prediction.
+FastAPI routes for fire-risk predictions.
 
-This layer is deliberately thin: it validates input, calls into
-backend.api.prediction (DB access) and lets backend.prediction_engine do the
-science, then shapes the result into JSON. No fire logic lives here.
+This layer is deliberately thin: it validates input, reads predictions that
+the pipeline has already stored (backend.api.fire_prediction), and shapes the
+result into JSON. No fire logic and no model inference happen per request --
+predictions are made once per forecast run by Scripts/fetch_weather_live.py
+(or POST /predictions/refresh).
 """
 
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.api.fire_prediction import get_latest_predictions, get_stored_predictions
-from backend.api.prediction import (
-    get_live_fire_risk_by_location,
-    get_live_fire_risk_predictions,
+from backend.api.features import build_run_features
+from backend.api.fire_prediction import (
+    VALID_RISK_LEVELS, get_current_predictions, predict_run,
 )
+from backend.api.weather import latest_forecast_run
 from Scripts.prediction_engine import OUTPUT_COLS
 from backend.schemas.prediction import FireRiskResponse
 
@@ -27,25 +29,34 @@ AUS_LAT_MIN, AUS_LAT_MAX = -44.0, -10.0
 AUS_LON_MIN, AUS_LON_MAX = 112.0, 154.0
 
 MAX_HOURS_BACK = 720  # 30 days
-VALID_RISK_LEVELS = {"Low", "Moderate", "High", "Extreme"}
+
+# Kept so existing clients can still send it; predictions now come from the
+# latest forecast run, so it no longer changes the result.
+HOURS_BACK_QUERY = Query(
+    168, ge=1, le=MAX_HOURS_BACK,
+    description="Ignored (kept for older clients). Predictions come from the latest forecast run.",
+)
+
+
+def _today_utc() -> date_type:
+    return datetime.now(timezone.utc).date()
+
+
+def _check_risk_level(risk_level: str | None):
+    if risk_level is not None and risk_level not in VALID_RISK_LEVELS:
+        raise HTTPException(
+            status_code=422, detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}."
+        )
 
 
 def _to_response(df: pd.DataFrame, hours_back: int) -> FireRiskResponse:
-    """
-    Turns the pipeline's DataFrame into the JSON response envelope.
-
-    The pipeline now carries more columns than the API returns (the extras
-    exist so a saved prediction can be reproduced). They are dropped here
-    explicitly rather than left for Pydantic to ignore, so the response
-    payload is a deliberate choice and not a side effect of model config.
-    """
+    """Turns stored predictions into the JSON response envelope."""
     if df.empty:
         return FireRiskResponse(count=0, hours_back=hours_back, spinup_count=0, predictions=[])
 
     out = df[[c for c in OUTPUT_COLS if c in df.columns]].copy()
     # JSON has no NaN, and pandas/numpy scalar types don't serialise cleanly.
     out = out.replace({np.nan: None})
-    out["acq_date"] = pd.to_datetime(out["acq_date"]).dt.date
     out["risk_level"] = out["risk_level"].astype(str)
     out["kbdi_spinup_flag"] = out["kbdi_spinup_flag"].astype(bool)
     out["fire_predicted"] = out["fire_predicted"].astype(int)
@@ -61,13 +72,7 @@ def _to_response(df: pd.DataFrame, hours_back: int) -> FireRiskResponse:
 
 @router.get("", response_model=FireRiskResponse, summary="Fire risk for all grid cells")
 def read_live_fire_risk(
-    hours_back: int = Query(
-        168,
-        ge=1,
-        le=MAX_HOURS_BACK,
-        description="How many hours of weather data to pull. Defaults to 168 (7 days), "
-                    "matching the forecast window fetched from Open-Meteo.",
-    ),
+    hours_back: int = HOURS_BACK_QUERY,
     risk_level: str | None = Query(
         None,
         description="Optionally return only cells at this risk level "
@@ -79,70 +84,51 @@ def read_live_fire_risk(
     ),
 ) -> FireRiskResponse:
     """
-    Next-day fire-risk predictions for every Australian grid cell that has
-    live weather data in the lookback window, highest risk first.
+    Current fire-risk predictions from today (UTC) onward for every grid cell,
+    highest risk first.
     """
-    try:
-        df = get_live_fire_risk_predictions(hours_back=hours_back)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=f"Model file not available: {exc}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    if risk_level is not None and not df.empty:
-        if risk_level not in VALID_RISK_LEVELS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}.",
-            )
-        df = df[df["risk_level"].astype(str) == risk_level]
-
-    if limit is not None:
-        df = df.head(limit)
-
+    _check_risk_level(risk_level)
+    df = get_current_predictions(start_date=_today_utc(), risk_level=risk_level, limit=limit)
     return _to_response(df, hours_back)
 
 
 @router.post(
     "/refresh",
     response_model=FireRiskResponse,
-    summary="Recompute fire risk and save it to the database",
+    summary="Recompute predictions for the latest forecast run",
 )
-def refresh_fire_risk(
-    hours_back: int = Query(168, ge=1, le=MAX_HOURS_BACK),
-    model_version: str | None = Query(
-        None, description="Optional label for the model run, stored for audit."
-    ),
-) -> FireRiskResponse:
+def refresh_fire_risk(hours_back: int = HOURS_BACK_QUERY) -> FireRiskResponse:
     """
-    Runs the prediction pipeline over all grid cells and writes the results to
-    the fire_prediction table, superseding any existing prediction for the
-    same cell and day.
-
-    This is the expensive call -- run it on a schedule after each weather
-    fetch, then serve the dashboard from GET /predictions/stored.
+    Builds any missing features for the latest forecast run and predicts them
+    with the current model. Use it after retraining the model; new weather
+    comes from Scripts/fetch_weather_live.py, which also predicts.
     """
-    try:
-        df = get_live_fire_risk_predictions(
-            hours_back=hours_back, persist=True, model_version=model_version
+    run_id = latest_forecast_run()
+    if run_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No forecast in the database yet -- run Scripts/fetch_weather_live.py first.",
         )
+    try:
+        build_run_features(run_id)
+        predict_run(run_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=503, detail=f"Model file not available: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return _to_response(df, hours_back)
+    return _to_response(get_current_predictions(start_date=_today_utc()), hours_back)
 
 
 @router.get(
     "/stored",
     response_model=FireRiskResponse,
-    summary="Read saved predictions (fast, works offline)",
+    summary="Read saved predictions",
 )
 def read_stored_predictions(
     latest_only: bool = Query(
         True,
-        description="Return only the most recent run. Turn off to query history.",
+        description="Only today (UTC) onward. Turn off to query past days with start_date/end_date.",
     ),
     start_date: date_type | None = Query(None, description="Only predictions from this date on."),
     end_date: date_type | None = Query(None, description="Only predictions up to this date."),
@@ -150,29 +136,17 @@ def read_stored_predictions(
     limit: int | None = Query(None, ge=1, description="Cap how many rows are returned."),
 ) -> FireRiskResponse:
     """
-    Reads predictions already saved in the database. No model inference and no
-    Open-Meteo calls, so this is fast and still works if either is unavailable
-    -- this is what the dashboard should call.
+    The current prediction for each (cell, day). Past days keep the last
+    prediction made for them.
     """
-    if risk_level is not None and risk_level not in VALID_RISK_LEVELS:
-        raise HTTPException(
-            status_code=422, detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}."
-        )
-
+    _check_risk_level(risk_level)
     if latest_only:
-        df = get_latest_predictions(limit=limit)
-        if risk_level is not None and not df.empty:
-            df = df[df["risk_level"] == risk_level]
-    else:
-        df = get_stored_predictions(
-            start_date=start_date,
-            end_date=end_date,
-            risk_level=risk_level,
-            limit=limit,
-        )
-
-    # No trimming needed here -- _to_response() selects the response columns.
+        start_date, end_date = _today_utc(), None
+    df = get_current_predictions(
+        start_date=start_date, end_date=end_date, risk_level=risk_level, limit=limit
+    )
     return _to_response(df, hours_back=0)
+
 
 @router.get(
     "/location",
@@ -192,20 +166,13 @@ def read_live_fire_risk_by_location(
         le=AUS_LON_MAX,
         description="Longitude (WGS84). Snapped to the nearest 0.5-degree grid cell.",
     ),
-    hours_back: int = Query(168, ge=1, le=MAX_HOURS_BACK),
+    hours_back: int = HOURS_BACK_QUERY,
 ) -> FireRiskResponse:
     """
-    Next-day fire-risk predictions for the single grid cell covering the
-    given coordinates. Returns an empty list if that cell has no live
-    weather data yet -- run the Open-Meteo live fetch first.
+    Current predictions from today (UTC) onward for the grid cell covering the
+    given coordinates. Empty if that cell has no forecast yet.
     """
-    try:
-        df = get_live_fire_risk_by_location(
-            latitude=latitude, longitude=longitude, hours_back=hours_back
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=f"Model file not available: {exc}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
+    df = get_current_predictions(
+        start_date=_today_utc(), latitude=latitude, longitude=longitude
+    )
     return _to_response(df, hours_back)
