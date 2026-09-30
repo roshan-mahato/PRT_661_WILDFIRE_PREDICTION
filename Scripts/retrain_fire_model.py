@@ -56,10 +56,10 @@ than a higher one you cannot defend.
 
 USAGE
 -----
-    uv run python Scripts/retrain_fire_model.py --input data/final.csv
-    uv run python Scripts/retrain_fire_model.py --input data/final.csv --buffer-days 0
-    uv run python Scripts/retrain_fire_model.py --input data/final.csv --neg-per-pos 3
-    uv run python Scripts/retrain_fire_model.py --input data/final.csv --no-save
+    uv run python Scripts/retrain_fire_model.py --input data/final_dataset.csv
+    uv run python Scripts/retrain_fire_model.py --input data/final_dataset.csv --buffer-days 0
+    uv run python Scripts/retrain_fire_model.py --input data/final_dataset.csv --neg-per-pos 3
+    uv run python Scripts/retrain_fire_model.py --input data/final_dataset.csv --no-save
 
 The saved bundle keeps the same shape the backend expects
 (model / model_name / features / scaler / threshold_default /
@@ -438,8 +438,8 @@ def report_importance(model, features: list) -> pd.DataFrame:
 # ==============================================================================
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0])
-    parser.add_argument("--input", default="data/final.csv",
-                        help="Labelled daily dataset CSV (default: data/final.csv)")
+    parser.add_argument("--input", default="data/final_dataset.csv",
+                        help="Labelled daily dataset CSV (default: data/final_dataset.csv)")
     parser.add_argument("--output", default="models/best_fire_model.joblib",
                         help="Where to write the model bundle")
     parser.add_argument("--keep-old-features", action="store_true",
