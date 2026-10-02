@@ -29,6 +29,9 @@ _ICON_PATHS = {
     "calendar": '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
     "external": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
     "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    "trend_up": '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+    "trend_down": '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
+    "minus": '<path d="M5 12h14"/>',
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
 }
 
@@ -128,7 +131,7 @@ GLOBAL_CSS = f"""
 
 /* ---------- hero status banner ---------- */
 .hero {{
-  position: relative; overflow: hidden;
+  position: relative;
   border-radius: 22px;
   padding: 28px 32px;
   color: {C["ink_text"]};
@@ -341,6 +344,46 @@ GLOBAL_CSS = f"""
 }}
 .callout .icon {{ color: {C["moderate"]}; margin-top: 1px; }}
 .empty-note {{ font-size: 0.85rem; color: {C["text_muted"]}; line-height: 1.5; }}
+
+/* ---------- glossary tooltips: utils.glossary.term() ---------- */
+.term {{
+  position: relative; cursor: help;
+  text-decoration: underline dotted; text-underline-offset: 3px;
+  text-decoration-color: currentColor; text-decoration-thickness: 1px;
+}}
+.term:focus {{ outline: 2px solid {C["ember"]}; outline-offset: 2px; border-radius: 3px; }}
+.term::after {{
+  content: attr(data-tip);
+  position: absolute; left: 50%; bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  width: max-content; max-width: 260px;
+  padding: 9px 11px; border-radius: 9px;
+  background: {C["ink"]}; color: {C["ink_text"]};
+  font-size: 0.74rem; font-weight: 400; line-height: 1.45;
+  letter-spacing: 0; text-transform: none; text-align: left; white-space: normal;
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, 0.5);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .12s ease; z-index: 1000;
+}}
+.term:hover::after, .term:focus::after {{ opacity: 1; visibility: visible; }}
+
+/* ---------- best / worst day line ---------- */
+.week-line {{
+  display: flex; flex-wrap: wrap; gap: 8px 22px;
+  margin: 0 0 10px; font-size: 0.85rem; color: {C["text_muted"]};
+}}
+.week-line span {{ display: inline-flex; align-items: center; gap: 7px; }}
+.week-line b {{ color: {C["text"]}; }}
+.week-line .up {{ color: {C["extreme"]}; }}
+.week-line .down {{ color: {C["low"]}; }}
+
+/* ---------- "why is the risk high here" ---------- */
+.why-list {{ display: grid; gap: 7px; margin-top: 4px; }}
+.why-item {{ display: flex; gap: 8px; align-items: flex-start; font-size: 0.8rem; color: {C["text"]}; line-height: 1.4; }}
+.why-item .icon {{ margin-top: 1px; color: var(--c); }}
+.why-calm {{ font-size: 0.76rem; color: {C["text_muted"]}; margin-top: 8px; line-height: 1.45; }}
+.why-note {{ font-size: 0.76rem; color: {C["text_muted"]}; margin-top: 8px; line-height: 1.45; font-style: italic; }}
+.place {{ display: block; font-size: 0.72rem; color: {C["text_dim"]}; font-weight: 400; }}
 
 /* ---------- medium screens: wrap rows before they get cramped ---------- */
 .st-key-topbar button p {{ white-space: nowrap; }}
