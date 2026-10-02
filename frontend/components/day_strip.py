@@ -12,7 +12,9 @@ from datetime import date, timedelta
 
 import streamlit as st
 
-from utils.styles import html
+from utils.glossary import term
+from utils.regions import week_highlights
+from utils.styles import html, icon
 from utils.theme import COLORS, SEVERITY_STYLE
 
 SESSION_KEY = "selected_forecast_day"
@@ -38,7 +40,46 @@ def _tile_html(option: dict, selected: bool) -> str:
         f'<div class="prob">{option["peak_probability"]:.0%}</div>'
         f'<div class="lvl">{option["peak_level"]}</div>'
         f'<div class="meta">{option["at_risk_count"]} of {option["cell_count"]} cells</div>'
-        f'<div class="meta" style="margin-top:0">FFDI {option["max_ffdi"]:.1f}</div>'
+        f'<div class="meta" style="margin-top:0">{term("ffdi")} {option["max_ffdi"]:.1f}</div>'
+        "</div>"
+    )
+
+
+def _day_name(day: date) -> str:
+    """'Thursday 24 Sep', or 'Today' / 'Tomorrow' with the date."""
+    label = _day_label(day)
+    full = day.strftime("%A")
+    return f"{label if label in ('Today', 'Tomorrow') else full} {day.strftime('%d %b')}"
+
+
+def _at_risk_text(option: dict) -> str:
+    return f'{option["at_risk_count"]} of {option["cell_count"]} cells at risk'
+
+
+def week_summary_html(options: list) -> str:
+    """
+    One line naming the riskiest and calmest day, e.g.
+    "Riskiest: Thursday 24 Sep (Extreme, 40 of 137 cells at risk)
+     · Lowest risk: Monday 21 Sep (3 of 137 cells at risk)".
+    Empty when there are fewer than two days to compare.
+    """
+    highlights = week_highlights(options)
+    if highlights is None:
+        return ""
+    worst, best = highlights["worst"], highlights["best"]
+    if highlights["flat"]:
+        return (
+            f'<div class="week-line"><span>{icon("minus", 15)}<span>Risk stays about the same '
+            f"all week: peak level <b>{worst['peak_level']}</b>, with "
+            f"{best['at_risk_count']}–{worst['at_risk_count']} of {worst['cell_count']} "
+            "cells at risk each day.</span></span></div>"
+        )
+    return (
+        '<div class="week-line">'
+        f'<span><span class="up">{icon("trend_up", 15)}</span><span>Riskiest day: '
+        f"<b>{_day_name(worst['date'])}</b> ({worst['peak_level']} peak, {_at_risk_text(worst)})</span></span>"
+        f'<span><span class="down">{icon("trend_down", 15)}</span><span>Lowest risk: '
+        f"<b>{_day_name(best['date'])}</b> ({_at_risk_text(best)})</span></span>"
         "</div>"
     )
 
@@ -92,6 +133,7 @@ def render_day_strip(options: list):
               <span class="title">Forecast days</span>
               <span class="hint">{hint}</span>
             </div>
+            {week_summary_html(options)}
             """
         )
 

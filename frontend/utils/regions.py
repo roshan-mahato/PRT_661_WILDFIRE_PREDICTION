@@ -150,6 +150,7 @@ def day_options(df: pd.DataFrame) -> list:
                 "date": day,
                 "peak_level": peak,
                 "peak_probability": float(group["fire_probability"].max()),
+                "mean_probability": float(group["fire_probability"].mean()),
                 "at_risk_count": int(group["fire_predicted"].sum()),
                 "cell_count": int(len(group)),
                 "max_ffdi": float(group["ffdi"].max()),
@@ -216,6 +217,35 @@ def summarise_region(df: pd.DataFrame, region: str) -> Dict[str, Any]:
         "spinup_count": int(day["kbdi_spinup_flag"].sum()) if "kbdi_spinup_flag" in day else 0,
         "forecast_date": pd.to_datetime(day["acq_date"]).max().date(),
     }
+
+
+def week_highlights(options: list) -> Optional[Dict[str, Any]]:
+    """
+    Picks the riskiest and calmest forecast day from day_options().
+
+    Days are ranked by the share of cells at risk -- how much of the region
+    is in danger -- with mean probability breaking ties. The single peak cell
+    is a poor ranking key: nationally some cell is Extreme almost every day.
+
+    Returns None with fewer than two days. `flat` is True when the riskiest
+    and calmest days are within 15% of each other (or 2 percentage points,
+    whichever is larger), so the UI can say the outlook is steady instead of
+    naming an arbitrary "worst" day. The test is relative because the share
+    at risk is often small: nationally ~13%, where 11% vs 15% is a real
+    difference of about a hundred cells.
+    """
+    if len(options) < 2:
+        return None
+
+    def score(option):
+        share = option["at_risk_count"] / option["cell_count"] if option["cell_count"] else 0.0
+        return (share, option.get("mean_probability", option["peak_probability"]))
+
+    ranked = sorted(options, key=score)
+    worst, best = ranked[-1], ranked[0]
+    worst_share, best_share = score(worst)[0], score(best)[0]
+    flat = (worst_share - best_share) < max(0.02, 0.15 * worst_share)
+    return {"worst": worst, "best": best, "flat": flat}
 
 
 def ffdi_band(ffdi: float) -> str:

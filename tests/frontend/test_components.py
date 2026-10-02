@@ -68,7 +68,7 @@ def test_tile_html_shows_day_figures(predictions):
     assert "90%" in html
     assert "Extreme" in html
     assert "3 of 6 cells" in html
-    assert "FFDI 60.0" in html
+    assert ">FFDI</span> 60.0" in html
 
 
 def test_tile_html_highlights_selected_day(predictions):
@@ -118,6 +118,7 @@ def test_marker_radius_grows_with_probability():
 # ----------------------------------------------------------------------------
 from components import hero  # noqa: E402
 from utils import styles  # noqa: E402
+from utils.places import describe_location  # noqa: E402
 
 
 def test_hero_headline_and_facts(markdown, predictions):
@@ -126,16 +127,23 @@ def test_hero_headline_and_facts(markdown, predictions):
 
     (html,) = markdown
     assert "Extreme</span> fire risk" in html
-    assert "3 of 6</b> monitored grid cells (50%)" in html
+    assert "3 of 6</b> monitored" in html
+    assert ">grid cells</span> (50%)" in html
     assert "33.0°S, 147.0°E" in html
+    assert describe_location(-33.0, 147.0) in html
     assert ">90<small>%</small>" in html
     assert "Showing 6 grid cell(s) for Australia (National)" in html
     assert hero.ADVICE["Extreme"] in html
 
 
-def test_hero_scale_marker_sits_at_peak_probability(markdown, predictions):
-    hero.render_hero(summarise_region(predictions, "Australia (National)"), "Australia (National)", "")
-    assert 'class="scale-marker" style="left:90.0%"' in markdown[0]
+@pytest.mark.parametrize(
+    ("level", "left"),
+    [("Low", "12.5"), ("Moderate", "37.5"), ("High", "62.5"), ("Extreme", "87.5")],
+)
+def test_hero_scale_marker_sits_in_the_level_step(level, left):
+    """Risk bands are scaled around the model threshold, not evenly spaced in
+    probability, so the marker goes in the middle of the level's own step."""
+    assert f'class="scale-marker" style="left:{left}%"' in hero._scale(level)
 
 
 @pytest.mark.parametrize(
