@@ -134,6 +134,7 @@ Key references and full citation list are available in the project proposal repo
 ### Contents
 
 - [Project Setup Instructions](#project-setup-instructions)
+- [Running the Tests](#running-the-tests)
 - [Suggested Development Flow](#suggested-development-flow)
 - [Notes](#notes)
 
@@ -242,6 +243,26 @@ Notes:
 - If you need to migrate already-committed large files into LFS, see the Git LFS migration snippet above.
 
 ---
+## Running the Tests
+
+The automated tests cover the pipeline's validation checks (`validate_output()`), including clean data, missing columns, out-of-range values, null values, and default and custom violation thresholds.
+
+1. Install the test dependencies (the pipeline module also imports these):
+
+```bash
+pip install pytest pandas numpy matplotlib seaborn plotly statsmodels
+```
+
+2. From the repository root, run:
+
+```bash
+pytest tests/
+```
+
+Notes:
+
+- Run the command from the repository root, otherwise the `test_scripts` import fails.
+- `test_scripts/__init__.py` and `tests/__init__.py` must exist for the imports to resolve.
 
 ## Suggested Development Flow
 
@@ -251,5 +272,6 @@ Notes:
 4. Load NASA FIRMS and weather data
 5. Run feature engineering pipeline
 6. Start dashboard and validate outputs
+7. Run the automated tests with `pytest tests/`
 
 </details>
