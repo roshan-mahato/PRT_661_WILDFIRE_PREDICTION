@@ -48,7 +48,6 @@ def clear_caches():
     for fn in (
         api_client.fetch_stored_predictions,
         api_client.fetch_live_predictions,
-        api_client.fetch_feature_importance,
         api_client.check_api_health,
     ):
         fn.clear()
@@ -190,39 +189,6 @@ def test_refresh_errors_are_reported_not_raised(monkeypatch, exc, message):
     df, error = api_client.refresh_predictions()
     assert df.empty
     assert message in error
-
-
-# ----------------------------------------------------------------------------
-# Feature importance
-# ----------------------------------------------------------------------------
-def test_fetch_feature_importance(monkeypatch):
-    fake = _mock_get(
-        monkeypatch,
-        FakeResponse(
-            {
-                "model_name": "LightGBM",
-                "importance_type": "gain",
-                "trained_at": None,
-                "features": [
-                    {"feature": "kbdi", "importance": 60.0},
-                    {"feature": "lat_round", "importance": 40.0},
-                ],
-            }
-        ),
-    )
-    df, error = api_client.fetch_feature_importance()
-    assert error is None
-    assert list(df.columns) == ["feature", "importance"]
-    assert df["importance"].sum() == pytest.approx(100.0)
-    assert fake.calls[0]["url"].endswith("/model/feature-importance")
-
-
-def test_fetch_feature_importance_error(monkeypatch):
-    _mock_get(monkeypatch, FakeResponse({"detail": "no model"}, 503))
-    df, error = api_client.fetch_feature_importance()
-    assert df.empty
-    assert list(df.columns) == ["feature", "importance"]
-    assert "no model" in error
 
 
 # ----------------------------------------------------------------------------

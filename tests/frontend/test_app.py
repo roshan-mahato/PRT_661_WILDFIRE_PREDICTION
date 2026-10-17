@@ -42,12 +42,6 @@ class FakeApi:
         self.calls.append("refresh")
         return self.predictions, None
 
-    def importance(self):
-        self.calls.append("importance")
-        if self.error:
-            return pd.DataFrame(columns=["feature", "importance"]), self.error
-        return pd.DataFrame([{"feature": "kbdi", "importance": 100.0}]), None
-
     def health(self):
         return (True, "API healthy") if self.healthy else (False, "API down")
 
@@ -56,7 +50,6 @@ def _install(monkeypatch, fake: FakeApi):
     monkeypatch.setattr(api_client, "fetch_stored_predictions", fake.stored)
     monkeypatch.setattr(api_client, "fetch_live_predictions", fake.live)
     monkeypatch.setattr(api_client, "refresh_predictions", fake.refresh)
-    monkeypatch.setattr(api_client, "fetch_feature_importance", fake.importance)
     monkeypatch.setattr(api_client, "check_api_health", fake.health)
 
 
@@ -112,9 +105,12 @@ def test_first_forecast_day_is_selected_by_default(api):
     assert _button(at, "Today").proto.type == "primary"
 
 
-def test_feature_importance_is_requested(api):
-    _run()
-    assert "importance" in api.calls
+def test_page_does_not_call_the_model_endpoint(api):
+    """Chart 4 is built from the predictions; the page must not depend on
+    /model/feature-importance (which once broke it with a 501)."""
+    at = _run()
+    assert set(api.calls) <= {"stored", "live", "refresh"}
+    assert "Where the Danger Lasts" in "\n".join(m.value for m in at.markdown)
 
 
 # ----------------------------------------------------------------------------
