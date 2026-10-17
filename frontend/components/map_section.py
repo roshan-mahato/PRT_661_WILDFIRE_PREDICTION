@@ -26,7 +26,6 @@ HEAT_GRADIENT = {
 }
 
 MAP_HEIGHT = 580
-TOP_CELLS = 5
 
 # Colour of a "why" item by how strongly it pushes fire danger up.
 DRIVER_COLOURS = {3: COLORS["extreme"], 2: COLORS["high"], 1: COLORS["moderate"]}
@@ -164,19 +163,6 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
             _render_threat_panel(summary, predictions)
 
 
-def _top_cells(predictions: pd.DataFrame) -> str:
-    top = predictions.nlargest(TOP_CELLS, "fire_probability")
-    rows = "".join(
-        f'<div class="cell-row"><span style="display:flex;align-items:flex-start">'
-        f'<span class="rank">{rank}</span><span>{describe_location(row.lat_round, row.lon_round)}'
-        f'<span class="place">{format_coords(row.lat_round, row.lon_round)}</span></span></span>'
-        f'<span class="prob" style="color:{SEVERITY_STYLE.get(row.risk_level, (COLORS["text"], ""))[0]}">'
-        f"{row.fire_probability:.0%}</span></div>"
-        for rank, row in enumerate(top.itertuples(index=False), start=1)
-    )
-    return f'<div class="mix-label">Highest-risk cells</div><div class="cell-list">{rows}</div>'
-
-
 def _why_block(predictions: pd.DataFrame) -> str:
     """Plain-English reasons for the highest-risk cell's rating."""
     row = predictions.loc[predictions["fire_probability"].idxmax()]
@@ -236,7 +222,6 @@ def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = No
         )
 
     has_cells = predictions is not None and not predictions.empty
-    top = _top_cells(predictions) if has_cells else ""
     why = _why_block(predictions) if has_cells else ""
 
     html(
@@ -254,7 +239,6 @@ def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = No
         <div class="mix-bar">{mix}</div>
         <div class="mix-key">{mix_key}</div>
         {why}
-        {top}
         {spinup_note}
         """
     )

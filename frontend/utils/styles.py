@@ -300,6 +300,14 @@ GLOBAL_CSS = f"""
 .donut-facts div {{ font-size: 0.75rem; color: {C["text_dim"]}; }}
 .donut-facts b {{ display: block; font-size: 1.05rem; color: {C["text"]}; }}
 
+.place-list {{ display: block; margin-top: 4px; }}
+.place-row {{
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 5px 0; border-bottom: 1px dashed {C["border"]};
+  font-size: 0.8rem; font-weight: 500; color: {C["text"]};
+}}
+.place-row:last-child {{ border-bottom: none; }}
+
 /* ---------- map card ---------- */
 .st-key-card-map iframe {{ border-radius: 12px; }}
 .legend {{

@@ -73,20 +73,3 @@ def empty_predictions() -> pd.DataFrame:
     from utils.api_client import PREDICTION_COLS
 
     return pd.DataFrame(columns=PREDICTION_COLS)
-
-
-@pytest.fixture
-def feature_importance() -> pd.DataFrame:
-    """Shape returned by api_client.fetch_feature_importance()."""
-    return pd.DataFrame(
-        [
-            {"feature": "lat_round", "importance": 20.0},
-            {"feature": "lon_round", "importance": 15.0},
-            {"feature": "soil_moisture_0_to_7cm", "importance": 25.0},
-            {"feature": "kbdi", "importance": 10.0},
-            {"feature": "temperature_2m", "importance": 12.0},
-            {"feature": "wind_speed_10m", "importance": 8.0},
-            {"feature": "month_sin", "importance": 6.0},
-            {"feature": "ffdi", "importance": 4.0},
-        ]
-    )

@@ -269,6 +269,42 @@ def nearest_town(lat: float, lon: float) -> tuple:
     return _NAMES[i], float(dist[i]), _bearing(TOWNS[i][2], TOWNS[i][3], lat, lon)
 
 
+def _grid(value: float, size: float = 0.5) -> float:
+    """Same double-round convention as the prediction pipeline's grid."""
+    return round(round(value / size) * size, 3)
+
+
+def towns_at_risk(predictions):
+    """
+    Every listed town whose grid area is in `predictions`, with that area's
+    forecast: one row per town, columns [town, lat_round, lon_round,
+    risk_level, fire_probability], riskiest first.
+
+    `predictions` should be one forecast day for one region. Towns whose area
+    has no forecast (offshore-filtered, or in another region) are left out,
+    so the result only covers places the current view actually forecasts.
+    """
+    import pandas as pd
+
+    cols = ["town", "lat_round", "lon_round", "risk_level", "fire_probability"]
+    if predictions is None or predictions.empty:
+        return pd.DataFrame(columns=cols)
+
+    forecast = {
+        (round(float(r.lat_round), 3), round(float(r.lon_round), 3)): (str(r.risk_level), float(r.fire_probability))
+        for r in predictions.itertuples(index=False)
+    }
+    rows = []
+    for name, lat, lon in zip(_NAMES, (t[2] for t in TOWNS), (t[3] for t in TOWNS)):
+        key = (_grid(lat), _grid(lon))
+        if key in forecast:
+            level, prob = forecast[key]
+            rows.append((name, key[0], key[1], level, prob))
+    out = pd.DataFrame(rows, columns=cols)
+    # Stable sort: towns with equal probability keep the list's order.
+    return out.sort_values("fire_probability", ascending=False, kind="mergesort").reset_index(drop=True)
+
+
 def describe_location(lat: float, lon: float) -> str:
     """
     "near Katherine, NT" when the cell is close to a town, otherwise
