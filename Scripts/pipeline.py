@@ -19,6 +19,11 @@ This script covers everything else.
     status         row counts, recent fetch runs, current predictions
     prune          delete forecast runs older than --keep-days (keeps the
                    rows behind current predictions; archive is never touched)
+    daily          the scheduled job: start Open-Meteo if it is down, run
+                   fetch_weather_live.py (history to yesterday + forecast +
+                   predictions), then prune. Logs to logs/daily_<date>.log.
+                   Scripts/schedule_daily.ps1 registers it with Windows Task
+                   Scheduler.
 
 USAGE
 -----
@@ -28,16 +33,20 @@ USAGE
     uv run python Scripts/pipeline.py predict
     uv run python Scripts/pipeline.py status
     uv run python Scripts/pipeline.py prune --keep-days 90
+    uv run python Scripts/pipeline.py daily
 ================================================================================
 """
 
 import argparse
 import glob
 import os
+import subprocess
 import sys
 import time
+from datetime import datetime
 
 import pandas as pd
+import requests
 from sqlalchemy import distinct, func, select, update
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +63,9 @@ from backend.db_model.prediction import Prediction
 
 DEFAULT_PARTS_DIR = os.path.join(REPO_ROOT, "data", "full_grid_parts")
 CSV_CHUNK_ROWS = 200_000
+LOG_DIR = os.path.join(REPO_ROOT, "logs")
+LIVE_SCRIPT = os.path.join(REPO_ROOT, "Scripts", "fetch_weather_live.py")
+SERVER_POLL_SECONDS = 5
 
 
 def cmd_init(args):
@@ -150,6 +162,103 @@ def cmd_prune(args):
     prune_forecasts(keep_days=args.keep_days)
 
 
+# ==============================================================================
+# daily -- the scheduled job
+# ==============================================================================
+class DailyLog:
+    """Prints to the console and appends to logs/daily_<date>.log."""
+
+    def __init__(self, path: str):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.path = path
+        self.file = open(path, "a", encoding="utf-8")
+
+    def __call__(self, msg: str = ""):
+        print(msg, flush=True)
+        self.file.write(msg + "\n")
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
+
+
+def server_up(url: str) -> bool:
+    try:
+        requests.get(url, timeout=5)   # any response, even a 400, means it is up
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
+def ensure_server(url: str, wait_seconds: int, log) -> bool:
+    """
+    For the self-hosted server: if it is down, `docker compose up -d` and
+    wait up to `wait_seconds` for it to answer. Returns whether it is up.
+    """
+    if server_up(url):
+        return True
+    log(f"Open-Meteo is not answering at {url} -- running `docker compose up -d`.")
+    try:
+        r = subprocess.run(["docker", "compose", "up", "-d"], cwd=REPO_ROOT,
+                           capture_output=True, text=True)
+        for line in (r.stdout + r.stderr).splitlines():
+            log(f"  docker: {line}")
+    except FileNotFoundError:
+        log("  docker is not installed or not on PATH.")
+        return False
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        time.sleep(SERVER_POLL_SECONDS)
+        if server_up(url):
+            log("Open-Meteo is up.")
+            return True
+    log(f"Open-Meteo still not answering after {wait_seconds}s (is Docker Desktop running?).")
+    return False
+
+
+def run_logged(cmd: list, log) -> int:
+    """Runs `cmd`, streaming its output to `log`. Returns the exit code."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    with subprocess.Popen(cmd, cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                          errors="replace") as proc:
+        for line in proc.stdout:
+            log(line.rstrip("\n"))
+    return proc.returncode
+
+
+def cmd_daily(args):
+    """
+    Fetch (history to yesterday, 7-day forecast, predictions), then prune.
+    The prune runs even if the fetch failed: it never touches the rows behind
+    current predictions, so it is safe either way. Exits with the fetch's
+    exit code (0 = every cell refreshed).
+    """
+    from Scripts.fetch_weather_history import is_public
+    from Scripts.fetch_weather_live import FORECAST_URL
+
+    log = DailyLog(os.path.join(LOG_DIR, f"daily_{datetime.now():%Y-%m-%d}.log"))
+    t0 = time.time()
+    log("=" * 74)
+    log(f"DAILY RUN  {datetime.now():%Y-%m-%d %H:%M:%S}")
+    log("=" * 74)
+    try:
+        if not is_public(FORECAST_URL) and not ensure_server(FORECAST_URL, args.wait, log):
+            log("Daily run aborted: no weather server. Current predictions are unchanged.")
+            sys.exit(2)
+
+        rc = run_logged([sys.executable, LIVE_SCRIPT], log)
+        if rc:
+            log(f"Fetch exited {rc}: some or all cells were not refreshed (see above); "
+                f"their previous predictions stay current.")
+        prune_forecasts(keep_days=args.keep_days, log=log)
+        log(f"Daily run finished in {(time.time() - t0) / 60:,.1f} min, exit {rc}.")
+        log(f"Log: {log.path}\n")
+        sys.exit(rc)
+    finally:
+        log.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -176,6 +285,12 @@ def main():
     p = sub.add_parser("prune", help="Delete old forecast runs")
     p.add_argument("--keep-days", type=int, default=90)
     p.set_defaults(func=cmd_prune)
+
+    p = sub.add_parser("daily", help="Scheduled job: fetch + predict, then prune")
+    p.add_argument("--keep-days", type=int, default=90, help="Prune forecast runs older than this")
+    p.add_argument("--wait", type=int, default=300,
+                   help="Seconds to wait for Open-Meteo after starting it")
+    p.set_defaults(func=cmd_daily)
 
     args = parser.parse_args()
     args.func(args)
