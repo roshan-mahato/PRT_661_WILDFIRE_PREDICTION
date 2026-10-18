@@ -10,6 +10,9 @@ import pandas as pd
 import streamlit as st
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
+from utils.explain import explain_cell, short_reason
+from utils.glossary import term
+from utils.places import describe_location
 from utils.regions import RISK_ORDER, STATE_BOUNDS, ffdi_band, get_region_view, is_national
 from utils.styles import format_coords, html, icon, section_header
 from utils.theme import COLORS, SEVERITY_STYLE
@@ -23,7 +26,9 @@ HEAT_GRADIENT = {
 }
 
 MAP_HEIGHT = 580
-TOP_CELLS = 5
+
+# Colour of a "why" item by how strongly it pushes fire danger up.
+DRIVER_COLOURS = {3: COLORS["extreme"], 2: COLORS["high"], 1: COLORS["moderate"]}
 
 
 def _marker_radius(probability: float) -> float:
@@ -73,6 +78,7 @@ def _build_map(predictions: pd.DataFrame, region: str) -> folium.Map:
 
     for row in predictions.itertuples(index=False):
         colour, _ = SEVERITY_STYLE.get(row.risk_level, (COLORS["low"], ""))
+        place = describe_location(row.lat_round, row.lon_round)
         spinup_note = (
             "<br><i>Low confidence: cell has under 30 days of history.</i>"
             if getattr(row, "kbdi_spinup_flag", False)
@@ -80,8 +86,10 @@ def _build_map(predictions: pd.DataFrame, region: str) -> folium.Map:
         )
         popup_html = (
             f"<div style='font-family:Inter,sans-serif;font-size:12px;line-height:1.55'>"
-            f"<b style='color:{colour};font-size:13px'>{row.risk_level} risk</b><br>"
+            f"<b style='color:{colour};font-size:13px'>{row.risk_level} risk</b> "
+            f"<span style='color:#57534E'>{place[0].upper() + place[1:]}</span><br>"
             f"Fire probability: <b>{row.fire_probability:.1%}</b><br>"
+            f"<b>Why:</b> {short_reason(row._asdict())}<br>"
             f"FFDI: {row.ffdi:.1f} ({ffdi_band(row.ffdi)})<br>"
             f"KBDI: {row.kbdi:.1f} &middot; Drought factor: {row.drought_factor:.1f}<br>"
             f"Temp: {row.temperature_2m:.1f}&deg;C &middot; "
@@ -99,7 +107,7 @@ def _build_map(predictions: pd.DataFrame, region: str) -> folium.Map:
             fill_color=colour,
             fill_opacity=0.85,
             popup=folium.Popup(popup_html, max_width=280),
-            tooltip=f"{row.risk_level} — {row.fire_probability:.0%}",
+            tooltip=f"{row.risk_level} {row.fire_probability:.0%} — {place}",
         ).add_to(m)
     return m
 
@@ -110,7 +118,7 @@ def _legend() -> str:
         for level in RISK_ORDER
     )
     return (
-        f'<div class="legend"><b style="color:{COLORS["text"]}">Risk level</b>{items}'
+        f'<div class="legend"><b style="color:{COLORS["text"]}">{term("risk_level")}</b>{items}'
         '<span class="note">Bigger circle = higher probability · click a cell for details</span></div>'
     )
 
@@ -130,7 +138,7 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
     section_header(
         "Where",
         "Risk map",
-        "Each circle is a 0.5° grid cell, coloured by its predicted risk level.",
+        f"Each circle is a 0.5° {term('grid_cell')}, coloured by its predicted risk level.",
     )
     with st.container(key="maprow"):
         map_col, right_col = st.columns([3, 1], gap="medium")
@@ -155,16 +163,26 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
             _render_threat_panel(summary, predictions)
 
 
-def _top_cells(predictions: pd.DataFrame) -> str:
-    top = predictions.nlargest(TOP_CELLS, "fire_probability")
-    rows = "".join(
-        f'<div class="cell-row"><span><span class="rank">{rank}</span>'
-        f"{format_coords(row.lat_round, row.lon_round)}</span>"
-        f'<span class="prob" style="color:{SEVERITY_STYLE.get(row.risk_level, (COLORS["text"], ""))[0]}">'
-        f"{row.fire_probability:.0%}</span></div>"
-        for rank, row in enumerate(top.itertuples(index=False), start=1)
+def _why_block(predictions: pd.DataFrame) -> str:
+    """Plain-English reasons for the highest-risk cell's rating."""
+    row = predictions.loc[predictions["fire_probability"].idxmax()]
+    info = explain_cell(row)
+    items = "".join(
+        f'<div class="why-item" style="--c:{DRIVER_COLOURS[d.strength]}">'
+        f"{icon(d.icon, 14)}<span>{d.text}</span></div>"
+        for d in info["drivers"]
     )
-    return f'<div class="mix-label">Highest-risk cells</div><div class="cell-list">{rows}</div>'
+    calm = (
+        f'<div class="why-calm">Working against fire: {", ".join(info["calming"])}.</div>'
+        if info["calming"] else ""
+    )
+    note = f'<div class="why-note">{info["note"]}</div>' if info["note"] else ""
+    return (
+        f'<div class="mix-label">{info["title"]}'
+        f'<span class="place">At the highest-risk cell, '
+        f'{describe_location(row["lat_round"], row["lon_round"])}</span></div>'
+        f'<div class="why-list">{items}</div>{calm}{note}'
+    )
 
 
 def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = None):
@@ -203,11 +221,8 @@ def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = No
             "cold-start estimates.</div></div>"
         )
 
-    top = (
-        _top_cells(predictions)
-        if predictions is not None and not predictions.empty
-        else ""
-    )
+    has_cells = predictions is not None and not predictions.empty
+    why = _why_block(predictions) if has_cells else ""
 
     html(
         f"""
@@ -216,14 +231,14 @@ def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = No
           <span style="font-size:.78rem;color:{COLORS["text_muted"]};margin-left:6px">
           {summary["max_risk_level"]} risk across {summary["cell_count"]} monitored cell(s).</span></div>
         <div class="panel-row">Forecast day<b>{summary["forecast_date"]}</b></div>
-        <div class="panel-row">Highest risk cell<b>{lat}, {lon}</b></div>
-        <div class="panel-row">Peak probability<b>{summary["max_probability"]:.1%}</b></div>
-        <div class="panel-row">Peak FFDI<b>{summary["max_ffdi"]:.1f} <small>({ffdi_band(summary["max_ffdi"])})</small></b></div>
-        <div class="panel-row">Peak KBDI<b>{summary["max_kbdi"]:.1f} <small>/ 203.2</small></b></div>
+        <div class="panel-row">Highest risk cell<b>{describe_location(lat, lon)}<span class="place">{lat}, {lon}</span></b></div>
+        <div class="panel-row"><span>Peak {term("probability", "probability")}</span><b>{summary["max_probability"]:.1%}</b></div>
+        <div class="panel-row"><span>Peak {term("ffdi")}</span><b>{summary["max_ffdi"]:.1f} <small>({ffdi_band(summary["max_ffdi"])})</small></b></div>
+        <div class="panel-row"><span>Peak {term("kbdi")}</span><b>{summary["max_kbdi"]:.1f} <small>/ 203.2</small></b></div>
         <div class="mix-label">Cells by risk level</div>
         <div class="mix-bar">{mix}</div>
         <div class="mix-key">{mix_key}</div>
-        {top}
+        {why}
         {spinup_note}
         """
     )

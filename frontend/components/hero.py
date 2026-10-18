@@ -6,6 +6,8 @@ live.
 
 import pandas as pd
 
+from utils.glossary import term
+from utils.places import describe_location
 from utils.regions import RISK_ORDER, ffdi_band, is_national
 from utils.styles import format_coords, html, icon
 from utils.theme import COLORS
@@ -44,14 +46,22 @@ FIRE_AUTHORITIES = {
 NATIONAL_AUTHORITY = ("Australian Warning System", "https://www.australianwarningsystem.com.au")
 
 
-def _scale(probability: float) -> str:
-    """Four equal bands (the model's risk levels are 25% wide) with a marker
-    at the peak probability."""
+def _scale(level: str) -> str:
+    """
+    The four risk levels as equal steps, with a marker in the middle of the
+    current one.
+
+    The steps are levels, not a probability axis: the level boundaries are
+    scaled around the model's alert threshold (Scripts/prediction_engine.py),
+    so they are not evenly spaced in probability and the API does not return
+    them. Placing the marker by level keeps it correct whatever the bands are.
+    """
     segments = "".join(
-        f'<span style="background:{COLORS[level.lower()]}"></span>' for level in RISK_ORDER
+        f'<span style="background:{COLORS[name.lower()]}"></span>' for name in RISK_ORDER
     )
-    labels = "".join(f"<span>{level}</span>" for level in RISK_ORDER)
-    left = min(max(probability, 0.0), 1.0) * 100
+    labels = "".join(f"<span>{name}</span>" for name in RISK_ORDER)
+    position = RISK_ORDER.index(level) if level in RISK_ORDER else 0
+    left = (position + 0.5) / len(RISK_ORDER) * 100
     return (
         '<div class="scale">'
         f'<div class="scale-track">{segments}</div>'
@@ -107,9 +117,9 @@ def render_hero(summary: dict, region: str, source_label: str) -> None:
             </div>
             <div class="hero-title"><span class="level">{level}</span> fire risk</div>
             <div class="hero-text">
-              <b>{at_risk} of {cells}</b> monitored grid cells ({share:.0%}) are flagged
-              for likely fire activity. The highest-risk cell is near
-              <b>{format_coords(lat, lon)}</b>.
+              <b>{at_risk} of {cells}</b> monitored {term("grid_cell", "grid cells")} ({share:.0%})
+              are flagged for likely fire activity. The highest risk is
+              <b>{describe_location(lat, lon)}</b> ({format_coords(lat, lon)}).
             </div>
             <div class="hero-advice">
               {icon("alert", 18)}
@@ -120,12 +130,12 @@ def render_hero(summary: dict, region: str, source_label: str) -> None:
               for {region} — forecast day {summary["forecast_date"]}, {source_label}.</div>
           </div>
           <div class="hero-gauge">
-            <div class="hero-gauge-label">Peak fire probability</div>
+            <div class="hero-gauge-label">Peak {term("probability")}</div>
             <div class="hero-gauge-value">{summary["max_probability"] * 100:.0f}<small>%</small></div>
-            {_scale(summary["max_probability"])}
+            {_scale(level)}
             <div class="hero-mini">
               <div>Regional average<b>{summary["mean_probability"]:.0%}</b></div>
-              <div>Peak FFDI<b>{summary["max_ffdi"]:.1f} · {ffdi_band(summary["max_ffdi"])}</b></div>
+              <div>Peak {term("ffdi")}<b>{summary["max_ffdi"]:.1f} · {ffdi_band(summary["max_ffdi"])}</b></div>
             </div>
           </div>
         </div>

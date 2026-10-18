@@ -4,6 +4,7 @@ Row of four headline stat tiles for the selected region and day.
 
 import streamlit as st
 
+from utils.glossary import term
 from utils.regions import ffdi_band
 from utils.styles import html, icon
 from utils.theme import COLORS, SEVERITY_STYLE
@@ -65,7 +66,7 @@ def render_insights_row(summary: dict):
 
         with cols[0]:
             _tile(
-                "Cells at Risk",
+                term("at_risk"),
                 "grid",
                 f"""
                 <div class="stat-value">{at_risk} <small>of {cells}</small></div>
@@ -79,7 +80,7 @@ def render_insights_row(summary: dict):
 
         with cols[1]:
             _tile(
-                "Risk Level",
+                term("risk_level"),
                 "flame",
                 f"""
                 <div class="stat-value" style="color:{risk_colour}">{level}</div>
@@ -93,7 +94,7 @@ def render_insights_row(summary: dict):
 
         with cols[2]:
             _tile(
-                "Peak FFDI",
+                f"Peak {term('ffdi')}",
                 "gauge",
                 f"""
                 <div class="stat-value">{ffdi:.1f} <small>{ffdi_band(ffdi)}</small></div>

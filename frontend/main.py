@@ -18,13 +18,11 @@ from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
 from utils.api_client import (
     check_api_health,
-    fetch_feature_importance,
     fetch_live_predictions,
     fetch_stored_predictions,
     refresh_predictions,
 )
 from utils.regions import (
-    build_daily_trend,
     day_options,
     filter_by_region,
     summarise_region,
@@ -79,7 +77,7 @@ if predictions.empty and not load_error:
 regional = filter_by_region(predictions, region)
 
 # The strip selects one day; the banner, cards and map describe that day,
-# while the trend charts keep the whole window so the shape of the forecast
+# while the charts keep the whole window so the shape of the forecast
 # stays visible. The selection is resolved before anything is drawn because
 # the banner sits above the strip.
 options = day_options(regional)
@@ -92,7 +90,6 @@ else:
     ].reset_index(drop=True)
 
 summary = summarise_region(day_regional, region)
-trend = build_daily_trend(regional)
 
 # ---------------------------------------------------------------------------
 # Sections
@@ -101,5 +98,4 @@ render_hero(summary, region, source_label)
 render_day_strip(options)
 render_insights_row(summary)
 render_map_with_insights(day_regional, region, summary)
-importance, importance_error = fetch_feature_importance()
-render_insights_section(trend, summary, regional, importance, importance_error)
+render_insights_section(regional, day_regional)
