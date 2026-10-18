@@ -11,7 +11,6 @@ that a dead API produces messages rather than a crash.
 
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from conftest import TODAY, TOMORROW
 from streamlit.testing.v1 import AppTest

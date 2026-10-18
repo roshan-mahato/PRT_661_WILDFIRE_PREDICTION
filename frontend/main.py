@@ -22,11 +22,8 @@ from utils.api_client import (
     fetch_stored_predictions,
     refresh_predictions,
 )
-from utils.regions import (
-    day_options,
-    filter_by_region,
-    summarise_region,
-)
+from core.geography import filter_by_region
+from core.summaries import day_options, summarise_region
 from utils.styles import inject_global_css
 
 st.set_page_config(

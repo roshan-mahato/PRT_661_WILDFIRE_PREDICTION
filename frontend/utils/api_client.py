@@ -11,16 +11,19 @@ Responses are cached so Streamlit's rerun-on-every-interaction model doesn't
 hammer the backend each time a dropdown changes.
 """
 
-import os
 from typing import Optional, Tuple
 
 import pandas as pd
 import requests
 import streamlit as st
+from config import (
+    API_BASE_URL,
+    HEALTH_CACHE_TTL,
+    PREDICTIONS_CACHE_TTL,
+    REFRESH_TIMEOUT,
+    REQUEST_TIMEOUT,
+)
 
-API_BASE_URL = os.getenv("WILDFIRE_API_URL", "http://127.0.0.1:8000")
-REQUEST_TIMEOUT = 30  # seconds for ordinary API reads
-REFRESH_TIMEOUT = int(os.getenv("WILDFIRE_REFRESH_TIMEOUT", "180"))
 
 PREDICTION_COLS = [
     "lat_round", "lon_round", "acq_date", "temperature_2m",
@@ -69,7 +72,7 @@ def _payload_to_frame(payload: Optional[dict]) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=PREDICTIONS_CACHE_TTL, show_spinner=False)
 def fetch_stored_predictions(
     latest_only: bool = True, risk_level: Optional[str] = None
 ) -> Tuple[pd.DataFrame, Optional[str]]:
@@ -91,7 +94,7 @@ def fetch_stored_predictions(
     return _payload_to_frame(payload), error
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=PREDICTIONS_CACHE_TTL, show_spinner=False)
 def fetch_live_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[str]]:
     """
     Computes predictions fresh from current weather data, without saving them.
@@ -134,7 +137,7 @@ def refresh_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[s
     return _payload_to_frame(payload), None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=HEALTH_CACHE_TTL, show_spinner=False)
 def check_api_health() -> Tuple[bool, str]:
     """
     Returns (is_healthy, message). Used to show a banner when the model or

@@ -9,8 +9,10 @@ import pandas as pd
 import pytest
 from components import day_strip, map_section
 from conftest import TODAY, TOMORROW
-from utils import explain, glossary, places
-from utils.regions import STATE_BOUNDS, day_options, summarise_region, week_highlights
+from core import explain, places
+from core.geography import STATE_BOUNDS
+from core.summaries import day_options, summarise_region, week_highlights
+from utils import glossary
 
 STATE_ABBR = {
     "New South Wales": "NSW", "Victoria": "VIC", "Queensland": "QLD",
