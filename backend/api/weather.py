@@ -11,10 +11,14 @@ from typing import Iterable, Optional
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import insert, text, update
+from sqlalchemy import func, insert, select, update
 
 from backend.database import engine, write_lock
+from backend.db_model.feature_engineered import FeatureEngineered
 from backend.db_model.fetch_run import FetchRun
+from backend.db_model.grid_cell import GridCell
+from backend.db_model.prediction import Prediction
+from backend.db_model.weather_daily import WeatherDaily
 from Scripts.prediction_engine import DAILY_PEAK_COLS
 
 WEATHER_VARS = [
@@ -51,6 +55,7 @@ def ensure_cells(cells: Iterable[tuple], is_land: Optional[bool] = None) -> dict
     rows = list({_cell_key(a, o) for a, o in cells})
     with write_lock, engine.begin() as conn:
         if rows:
+            # Raw SQL on purpose: SQLAlchemy's executemany() measured 1.3x slower.
             land = None if is_land is None else int(is_land)
             conn.exec_driver_sql(
                 "INSERT OR IGNORE INTO grid_cell (lat_round, lon_round, is_land) VALUES (?, ?, ?)",
@@ -62,7 +67,7 @@ def ensure_cells(cells: Iterable[tuple], is_land: Optional[bool] = None) -> dict
                     "AND (is_land IS NULL OR is_land != ?)",
                     [(land, a, o, land) for a, o in rows],
                 )
-        ids = conn.exec_driver_sql("SELECT lat_round, lon_round, cell_id FROM grid_cell").fetchall()
+        ids = conn.execute(select(GridCell.lat_round, GridCell.lon_round, GridCell.cell_id)).all()
     return {_cell_key(a, o): cid for a, o, cid in ids}
 
 
@@ -91,9 +96,9 @@ def start_run(source: str, window_start=None, window_end=None, note: Optional[st
 def finish_run(run_id: int, status: str) -> int:
     """Marks a run finished and stores how many weather rows it wrote."""
     with write_lock, engine.begin() as conn:
-        n = conn.exec_driver_sql(
-            "SELECT COUNT(*) FROM weather_daily WHERE run_id = ?", (run_id,)
-        ).scalar()
+        n = conn.execute(
+            select(func.count()).select_from(WeatherDaily).where(WeatherDaily.run_id == run_id)
+        ).scalar_one()
         conn.execute(update(FetchRun).where(FetchRun.run_id == run_id).values(
             status=status, finished_at=utc_now(), rows_written=n,
         ))
@@ -103,18 +108,21 @@ def finish_run(run_id: int, status: str) -> int:
 def latest_forecast_run() -> Optional[int]:
     """The newest forecast run that wrote any weather, or None."""
     with engine.connect() as conn:
-        return conn.exec_driver_sql(
-            "SELECT MAX(run_id) FROM fetch_run WHERE source = 'forecast' "
-            "AND status IN ('ok', 'partial') AND rows_written > 0"
+        return conn.execute(
+            select(func.max(FetchRun.run_id))
+            .where(FetchRun.source == "forecast", FetchRun.status.in_(("ok", "partial")),
+                   FetchRun.rows_written > 0)
         ).scalar()
 
 
 def list_runs(limit: int = 10) -> pd.DataFrame:
+    query = (select(FetchRun.run_id, FetchRun.source, FetchRun.issued_at, FetchRun.finished_at,
+                    FetchRun.status, FetchRun.window_start, FetchRun.window_end,
+                    FetchRun.rows_written, FetchRun.note)
+             .order_by(FetchRun.run_id.desc())
+             .limit(limit))
     with engine.connect() as conn:
-        return pd.read_sql(text(
-            "SELECT run_id, source, issued_at, finished_at, status, window_start, "
-            "window_end, rows_written, note FROM fetch_run ORDER BY run_id DESC LIMIT :n"
-        ), conn, params={"n": limit})
+        return pd.read_sql(query, conn)
 
 
 # ==============================================================================
@@ -167,6 +175,8 @@ def save_weather_daily(df: pd.DataFrame, run_id: int, source: str) -> int:
     # object dtype turns numpy scalars into plain Python values sqlite3 can bind.
     out = out.astype(object).where(out.notna(), None)
 
+    # Raw SQL on purpose: SQLAlchemy's executemany() measured 2x slower here
+    # (millions of rows on a history load).
     sql = (f"INSERT INTO weather_daily ({', '.join(WEATHER_INSERT_COLS)}) "
            f"VALUES ({', '.join('?' * len(WEATHER_INSERT_COLS))})")
     if source == "archive":
@@ -181,6 +191,22 @@ def save_weather_daily(df: pd.DataFrame, run_id: int, source: str) -> int:
     return max(result.rowcount, 0)
 
 
+def archive_last_dates() -> dict:
+    """
+    {(lat_round, lon_round): last archive day stored in weather_daily} for
+    every cell with any archive weather. Days are pd.Timestamp.
+    """
+    last = (select(WeatherDaily.cell_id, func.max(WeatherDaily.date).label("last_date"))
+            .where(WeatherDaily.source == "archive")
+            .group_by(WeatherDaily.cell_id)
+            .subquery())
+    query = (select(GridCell.lat_round, GridCell.lon_round, last.c.last_date)
+             .join(last, last.c.cell_id == GridCell.cell_id))
+    with engine.connect() as conn:
+        rows = conn.execute(query).all()
+    return {_cell_key(a, o): pd.Timestamp(d) for a, o, d in rows}
+
+
 def archive_coverage(cell_ids: Optional[Iterable[int]] = None) -> pd.DataFrame:
     """
     Per cell: the last archive day that already has features. The forecast
@@ -189,12 +215,15 @@ def archive_coverage(cell_ids: Optional[Iterable[int]] = None) -> pd.DataFrame:
     Returns:
         DataFrame [cell_id, lat_round, lon_round, last_date] (last_date as date).
     """
+    last = (select(FeatureEngineered.cell_id,
+                   func.max(FeatureEngineered.date).label("last_date"))
+            .where(FeatureEngineered.source == "archive")
+            .group_by(FeatureEngineered.cell_id)
+            .subquery())
+    query = (select(GridCell.cell_id, GridCell.lat_round, GridCell.lon_round, last.c.last_date)
+             .join(last, last.c.cell_id == GridCell.cell_id))
     with engine.connect() as conn:
-        df = pd.read_sql(text(
-            "SELECT g.cell_id, g.lat_round, g.lon_round, m.last_date FROM grid_cell g "
-            "JOIN (SELECT cell_id, MAX(date) AS last_date FROM feature_engineered "
-            "      WHERE source = 'archive' GROUP BY cell_id) m ON m.cell_id = g.cell_id"
-        ), conn)
+        df = pd.read_sql(query, conn)
     if cell_ids is not None:
         df = df[df["cell_id"].isin(list(cell_ids))]
     df["last_date"] = pd.to_datetime(df["last_date"]).dt.date
@@ -202,6 +231,7 @@ def archive_coverage(cell_ids: Optional[Iterable[int]] = None) -> pd.DataFrame:
 
 
 def table_counts() -> dict:
-    tables = ["grid_cell", "fetch_run", "weather_daily", "feature_engineered", "prediction"]
+    models = [GridCell, FetchRun, WeatherDaily, FeatureEngineered, Prediction]
     with engine.connect() as conn:
-        return {t: conn.exec_driver_sql(f"SELECT COUNT(*) FROM {t}").scalar() for t in tables}
+        return {m.__tablename__: conn.execute(select(func.count()).select_from(m)).scalar_one()
+                for m in models}

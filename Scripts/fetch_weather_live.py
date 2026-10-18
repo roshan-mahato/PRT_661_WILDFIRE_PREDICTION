@@ -19,10 +19,15 @@ WHAT IS FETCHED
 - Land cells only: ocean cells come from data/full_grid_land_mask.csv (built
   by fetch_weather_history.py; probed here on first use if missing). The
   full grid is 5,865 cells; land is ~2,861.
-- From the day after the archive history ends (weather_daily, source
+- First the archive history is brought up to yesterday from the archive API
+  (fetch_weather_history.update_archive), however long ago it ended, so
+  the forecast continues from observed weather. --no-history-update skips it.
+- Then from the day after the archive history ends (weather_daily, source
   'archive') to today + FORECAST_DAYS - 1, hourly. KBDI continues from the
   last archive feature row, so the days in between have to be fetched too.
-  Normally the archive ends yesterday and this is just the 7-day forecast.
+  After the update that is just the 7-day forecast. The forecast API only
+  keeps FORECAST_MAX_PAST_DAYS of past data; days before that are missing
+  and the KBDI recursion counts them as rain-free (a warning is printed).
   Cells with no history at all cold-start COLD_START_DAYS back.
 - The 9 model variables (up to 10 variables weigh the same).
 
@@ -73,11 +78,11 @@ import fetch_weather_history as hist  # noqa: E402
 from Scripts.prediction_engine import aggregate_to_daily, drop_implausible_readings  # noqa: E402
 
 # ---------- CONFIG ----------
-# FORECAST_URL = os.environ.get("OPENMETEO_FORECAST_URL", "http://127.0.0.1:8080/v1/forecast")
-FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
+FORECAST_URL = os.environ.get("OPENMETEO_FORECAST_URL", "http://127.0.0.1:8080/v1/forecast")
+# FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
 
 
-ARCHIVE_URL = os.environ.get("OPENMETEO_ARCHIVE_URL", hist.DEFAULT_ARCHIVE_URL)  # land-mask probe only
+ARCHIVE_URL = os.environ.get("OPENMETEO_ARCHIVE_URL", hist.DEFAULT_ARCHIVE_URL)  # history update + land mask
 FORECAST_DAYS = 7
 COLD_START_DAYS = 60     # cells with no archive history start this many days back
 
@@ -110,7 +115,12 @@ def forecast_window(days: int, cells: list, use_db: bool) -> tuple:
             d = last.get(c)
             start = min(start, today - timedelta(days=COLD_START_DAYS) if d is None
                         else d + timedelta(days=1))
-    start = max(start, today - timedelta(days=hist.FORECAST_MAX_PAST_DAYS))
+    floor = today - timedelta(days=hist.FORECAST_MAX_PAST_DAYS)
+    if start < floor:
+        print(f"WARNING: some archive history ends before {floor}, further back than the "
+              f"forecast API keeps. The days in between are missing and KBDI counts them "
+              f"as rain-free. Run Scripts/fetch_weather_history.py --update first.\n")
+    start = max(start, floor)
     return str(start), str(end)
 
 
@@ -216,7 +226,9 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--forecast-url", default=FORECAST_URL)
     parser.add_argument("--archive-url", default=ARCHIVE_URL,
-                        help="Only used to build the land mask if it does not exist yet")
+                        help="Archive API for the history update and the land mask")
+    parser.add_argument("--no-history-update", dest="update_history", action="store_false",
+                        help="Do not bring the archive history up to yesterday first")
     parser.add_argument("--days", type=int, default=FORECAST_DAYS, help="Forecast days incl. today")
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Cells per request")
     parser.add_argument("--workers", type=int, default=None,
@@ -251,6 +263,14 @@ def main():
     todo = land[: args.limit] if args.limit else land
     if args.save_db:
         seed_grid_cells({c: mask[c] for c in grid if c in mask})
+        if args.update_history:
+            hist_args = types.SimpleNamespace(
+                start=hist.DEFAULT_START, end=hist.DEFAULT_END, archive_url=args.archive_url,
+                forecast_url=args.forecast_url, batch_size=hist.DEFAULT_BATCH_SIZE,
+                workers=hist.DEFAULT_WORKERS, run_id=None)
+            # Cells it cannot bring up to date are still forecast; the
+            # forecast window below covers their missing days.
+            hist.update_archive(client, limiter, hist_args, todo)
 
     args.start, args.end = forecast_window(args.days, todo, args.save_db)
     weight = hist.request_weight(len(todo), args.start, args.end, len(LIVE_VARS))

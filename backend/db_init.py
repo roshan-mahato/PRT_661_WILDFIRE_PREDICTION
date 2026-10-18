@@ -4,6 +4,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
+from sqlalchemy import DDL, MetaData, Table, inspect
 
 from backend.database import engine
 from backend.db_model.base import Base
@@ -31,12 +32,14 @@ def create_tables():
     """
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
+        insp = inspect(conn)
         for table in Base.metadata.sorted_tables:
-            have = {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table.name})")}
+            have = {c["name"] for c in insp.get_columns(table.name)}
             for col in table.columns:
                 if col.name not in have and col.nullable:
+                    # SQLAlchemy has no ALTER construct (that is Alembic's job).
                     ddl = col.type.compile(dialect=engine.dialect)
-                    conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl}")
+                    conn.execute(DDL(f"ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl}"))
                     print(f"Added column {table.name}.{col.name}")
 
 
@@ -54,7 +57,7 @@ def init_db(drop_legacy: bool = False):
     if drop_legacy:
         with engine.begin() as conn:
             for t in LEGACY_TABLES:
-                conn.exec_driver_sql(f"DROP TABLE IF EXISTS {t}")
+                Table(t, MetaData()).drop(conn, checkfirst=True)
         print(f"Dropped legacy tables: {', '.join(LEGACY_TABLES)}")
 
     print(f"Database initialized at {engine.url.database}")

@@ -59,6 +59,16 @@ continuing each cell from its last stored day; live forecasts continue from
 there. --no-db writes the CSV files only. Part files fetched without the DB
 can be loaded later with `Scripts/pipeline.py load-history`.
 
+UPDATE TO YESTERDAY (--update)
+------------------------------
+Reads each cell's last archive day from weather_daily (not the progress log)
+and fetches from the day after it to --end (default yesterday), however many
+days that is. Cells with no archive at all start at --start. The new days'
+features continue each cell's KBDI from its last stored day, so the history
+stays one continuous series. Needs the DB; skips the combine step, so
+data/full_grid_daily_weather.csv is left alone. fetch_weather_live.py runs
+this before every forecast.
+
 SELF-HOSTED vs PUBLIC API
 -------------------------
 Default is the self-hosted server (docker-compose.yml: `docker compose up -d`),
@@ -93,6 +103,7 @@ USAGE
     uv run python Scripts/fetch_weather_history.py                           # full run + combine
     uv run python Scripts/fetch_weather_history.py --combine-only            # rebuild + verify
     uv run python Scripts/fetch_weather_history.py --end 2026-09-28
+    uv run python Scripts/fetch_weather_history.py --update                  # DB history -> yesterday
 ================================================================================
 """
 
@@ -114,7 +125,7 @@ import requests
 from retry_requests import retry
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from prediction_engine import DAILY_PEAK_COLS, daily_peaks  # noqa: E402
+from prediction_engine import DAILY_PEAK_COLS, daily_peaks  
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -169,6 +180,9 @@ DAILY_COLS = HOURLY_VARS + DAILY_PEAK_COLS
 
 MAX_HOURLY_FILL = 6      # longest run of missing hours filled by interpolation
 MAX_DAILY_FILL = 3       # longest run of missing days filled by interpolation
+
+DEFAULT_BATCH_SIZE = 10   # cells per request
+DEFAULT_WORKERS = 2       # parallel requests
 
 REQUEST_TIMEOUT_SECONDS = 300
 MAX_RETRY_PASSES = 3     # failed batches are retried within the same run
@@ -684,6 +698,100 @@ def run_pass(client, limiter, args, batches: list, tot: dict, n_todo: int, t0: f
     return failed
 
 
+def run_jobs(client, limiter, args, jobs: dict) -> tuple:
+    """
+    Fetches every (start, end) -> cells job, retrying failed batches.
+    Returns (totals, batches still failing after MAX_RETRY_PASSES).
+    """
+    batches = [(s, e, cells[i:i + args.batch_size]) for (s, e), cells in jobs.items()
+               for i in range(0, len(cells), args.batch_size)]
+    n_todo = sum(len(cells) for cells in jobs.values())
+    tot = {"cells": 0, "land": 0, "ocean": 0, "bad": 0, "fc": 0, "int": 0}
+    t0 = time.time()
+    for attempt in range(1, MAX_RETRY_PASSES + 1):
+        if attempt > 1:
+            wait = RETRY_BACKOFF_SECONDS * attempt
+            print(f"\nRetry pass {attempt}/{MAX_RETRY_PASSES}: {len(batches)} failed "
+                  f"batch(es), waiting {wait}s...", flush=True)
+            time.sleep(wait)
+        batches = run_pass(client, limiter, args, batches, tot, n_todo, t0)
+        if not batches:
+            break
+    print(f"\nThis run: {tot['land']:,} land cells saved, {tot['ocean']:,} ocean skipped, "
+          f"{tot['bad']:,} incomplete, {sum(len(b[2]) for b in batches):,} failed.")
+    print(f"Filled cell-days: {tot['fc']:,} from forecast, {tot['int']:,} interpolated.")
+    return tot, batches
+
+
+def print_jobs(jobs: dict):
+    for (s, e), cells in sorted(jobs.items(), key=lambda kv: -len(kv[1]))[:5]:
+        days = (pd.Timestamp(e) - pd.Timestamp(s)).days + 1
+        print(f"  missing {s} -> {e} ({days:,} day(s)): {len(cells):,} cell(s)")
+    if len(jobs) > 5:
+        print(f"  ... and {len(jobs) - 5:,} other window(s)")
+
+
+def db_gap_jobs(cells: list, start: str, end: str) -> dict:
+    """
+    (start, end) -> cells: each cell's days from the day after its last
+    archive day in weather_daily to `end`. Cells with no archive start at
+    `start`; cells already at `end` are left out.
+    """
+    from backend.api.weather import archive_last_dates
+    last = archive_last_dates()
+    stop = pd.Timestamp(end)
+    jobs = {}
+    for c in cells:
+        first = last[c] + ONE_DAY if c in last else pd.Timestamp(start)
+        if first <= stop:
+            jobs.setdefault((str(first.date()), str(stop.date())), []).append(c)
+    return jobs
+
+
+def update_archive(client, limiter, args, cells: list) -> int:
+    """
+    Brings the archive of `cells` up to args.end (see UPDATE TO YESTERDAY)
+    and builds the new days' features. `args` needs start, end, archive_url,
+    forecast_url, batch_size and workers. Returns the number of cells still
+    not up to date.
+    """
+    from backend.api.features import build_archive_features
+    from backend.api.weather import finish_run, start_run
+
+    jobs = db_gap_jobs(cells, args.start, args.end)
+    if not jobs:
+        print(f"Archive history: all {len(cells):,} cell(s) already end on {args.end}.\n")
+        return 0
+    n_cells = sum(len(c) for c in jobs.values())
+    first = min(s for s, _ in jobs)
+    print("=" * 74)
+    print(f"UPDATE ARCHIVE HISTORY TO {args.end}")
+    print("=" * 74)
+    print(f"{n_cells:,} of {len(cells):,} cell(s) behind | Archive: {args.archive_url}")
+    print_jobs(jobs)
+    if is_public(args.archive_url):
+        total = sum(request_weight(len(c), s, e) for (s, e), c in jobs.items())
+        print(f"PUBLIC API: this update weighs ~{total:,.0f} "
+              f"(~{total / PUBLIC_LIMITS['daily'][0]:,.1f} days of quota)")
+    args.run_id = start_run("archive", first, args.end, note=f"update to {args.end}")
+    print(f"Archive run: {args.run_id}\n")
+    try:
+        tot, failed = run_jobs(client, limiter, args, jobs)
+    except SystemExit:
+        # Stopped (Ctrl+C or daily limit): keep what was saved.
+        finish_run(args.run_id, "partial")
+        build_archive_features()
+        raise
+    left = sum(len(b[2]) for b in failed) + tot["bad"]
+    n = finish_run(args.run_id, "ok" if not left else "partial")
+    print(f"DB: archive run {args.run_id}, {n:,} new weather rows.")
+    build_archive_features()
+    if left:
+        print(f"{left:,} cell(s) are still behind -- run again to retry them.")
+    print()
+    return left
+
+
 # ==============================================================================
 # Combine + verify
 # ==============================================================================
@@ -750,12 +858,15 @@ def main():
     parser.add_argument("--end", default=DEFAULT_END, help="YYYY-MM-DD (default yesterday, UTC)")
     parser.add_argument("--archive-url", default=DEFAULT_ARCHIVE_URL)
     parser.add_argument("--forecast-url", default=DEFAULT_FORECAST_URL)
-    parser.add_argument("--batch-size", type=int, default=10, help="Cells per request")
-    parser.add_argument("--workers", type=int, default=2,
+    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Cells per request")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                         help="Parallel requests (use 1 on the public API)")
     parser.add_argument("--bbox", type=float, nargs=4, metavar=("LAT_MIN", "LAT_MAX", "LON_MIN", "LON_MAX"),
                         help="Only this part of the grid (test run), e.g. --bbox -34 -33 150 152")
     parser.add_argument("--limit", type=int, default=None, help="Only this many cells (test run)")
+    parser.add_argument("--update", action="store_true",
+                        help="Fetch each cell from the day after its last archive day in the DB "
+                             "to --end, however long the gap (see UPDATE TO YESTERDAY)")
     parser.add_argument("--combine-only", action="store_true",
                         help="Skip fetching; just combine part files and verify")
     parser.add_argument("--no-db", dest="save_db", action="store_false",
@@ -777,8 +888,19 @@ def main():
         sys.exit(2)
     mask_ocean = {c for c in grid if mask.get(c) is False}
 
-    migrate_legacy_progress()
     skip = mask_ocean | (read_cell_log(OCEAN_LOG) & set(grid))
+    if args.update:
+        if not args.save_db:
+            sys.exit("--update reads each cell's last day from the database; drop --no-db.")
+        sys.path.insert(0, REPO_ROOT)
+        from backend.api.weather import seed_grid_cells
+        from backend.db_init import create_tables
+        create_tables()
+        seed_grid_cells({c: mask[c] for c in grid if c in mask})
+        land = [c for c in grid if c not in skip]
+        sys.exit(1 if update_archive(client, limiter, args, land[: args.limit]) else 0)
+
+    migrate_legacy_progress()
     progress = read_progress()
     jobs = {}   # (start, end) -> cells missing exactly that window
     for c in grid:
@@ -799,11 +921,7 @@ def main():
     print(f"Grid: {len(grid):,} cells | ocean (skipped): {len(skip):,} | "
           f"up to date: {len(grid) - len(skip) - len(todo):,} | to fetch: {len(todo):,}")
     print(f"Dates: {args.start} -> {args.end}")
-    for (s, e), cells in sorted(jobs.items(), key=lambda kv: -len(kv[1]))[:5]:
-        days = (pd.Timestamp(e) - pd.Timestamp(s)).days + 1
-        print(f"  missing {s} -> {e} ({days:,} day(s)): {len(cells):,} cell(s)")
-    if len(jobs) > 5:
-        print(f"  ... and {len(jobs) - 5:,} other window(s)")
+    print_jobs(jobs)
     print(f"Archive: {args.archive_url}\nForecast (recent days): {args.forecast_url}")
     if is_public(args.archive_url):
         total = sum(request_weight(len(cells), s, e) for (s, e), cells in jobs.items())
@@ -823,21 +941,8 @@ def main():
             print(f"Archive run: {args.run_id}\n")
 
     if todo:
-        batches = [(s, e, cells[i:i + args.batch_size]) for (s, e), cells in jobs.items()
-                   for i in range(0, len(cells), args.batch_size)]
-        n_todo = sum(len(cells) for cells in jobs.values())
-        tot = {"cells": 0, "land": 0, "ocean": 0, "bad": 0, "fc": 0, "int": 0}
-        t0 = time.time()
         try:
-            for attempt in range(1, MAX_RETRY_PASSES + 1):
-                if attempt > 1:
-                    wait = RETRY_BACKOFF_SECONDS * attempt
-                    print(f"\nRetry pass {attempt}/{MAX_RETRY_PASSES}: {len(batches)} failed "
-                          f"batch(es), waiting {wait}s...", flush=True)
-                    time.sleep(wait)
-                batches = run_pass(client, limiter, args, batches, tot, n_todo, t0)
-                if not batches:
-                    break
+            tot, batches = run_jobs(client, limiter, args, jobs)
         except SystemExit:
             # Stopped (Ctrl+C or daily limit): keep what was saved, and build
             # its features so the live forecast can continue from it.
@@ -846,10 +951,6 @@ def main():
                 from backend.api.features import build_archive_features
                 build_archive_features()
             raise
-
-        print(f"\nThis run: {tot['land']:,} land cells saved, {tot['ocean']:,} ocean skipped, "
-              f"{tot['bad']:,} incomplete, {sum(len(b[2]) for b in batches):,} failed.")
-        print(f"Filled cell-days: {tot['fc']:,} from forecast, {tot['int']:,} interpolated.")
 
     if args.save_db:
         from backend.api.features import build_archive_features

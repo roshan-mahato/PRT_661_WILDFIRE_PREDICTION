@@ -38,15 +38,19 @@ import sys
 import time
 
 import pandas as pd
+from sqlalchemy import distinct, func, select, update
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from backend.api import weather  # noqa: E402
-from backend.api.features import build_archive_features, build_run_features  # noqa: E402
-from backend.api.fire_prediction import predict_run, prune_forecasts  # noqa: E402
-from backend.database import engine  # noqa: E402
-from backend.db_init import init_db  # noqa: E402
+from backend.api import weather  
+from backend.api.features import build_archive_features, build_run_features  
+from backend.api.fire_prediction import predict_run, prune_forecasts  
+from backend.database import engine  
+from backend.db_init import init_db
+from backend.db_model.feature_engineered import FeatureEngineered
+from backend.db_model.fetch_run import FetchRun
+from backend.db_model.prediction import Prediction
 
 DEFAULT_PARTS_DIR = os.path.join(REPO_ROOT, "data", "full_grid_parts")
 CSV_CHUNK_ROWS = 200_000
@@ -96,9 +100,10 @@ def cmd_load_history(args):
         raise
     n = weather.finish_run(run_id, "ok")
     with engine.begin() as conn:
-        conn.exec_driver_sql(
-            "UPDATE fetch_run SET window_start = ?, window_end = ? WHERE run_id = ?",
-            (None if lo is None else str(lo.date()), None if hi is None else str(hi.date()), run_id),
+        conn.execute(
+            update(FetchRun).where(FetchRun.run_id == run_id).values(
+                window_start=None if lo is None else lo.date(),
+                window_end=None if hi is None else hi.date())
         )
     print(f"Archive run {run_id}: {n:,} new weather rows ({seen - total:,} already stored).")
     build_archive_features()
@@ -124,15 +129,17 @@ def cmd_status(_args):
     print("\nRecent fetch runs:")
     runs = weather.list_runs(10)
     print(runs.to_string(index=False) if not runs.empty else "  none")
+    p, f = Prediction, FeatureEngineered
     with engine.connect() as conn:
         cur = pd.read_sql(
-            "SELECT MIN(date) AS first_day, MAX(date) AS last_day, COUNT(*) AS rows, "
-            "COUNT(DISTINCT cell_id) AS cells, MAX(run_id) AS latest_run "
-            "FROM prediction WHERE is_current = 1", conn)
+            select(func.min(p.date).label("first_day"), func.max(p.date).label("last_day"),
+                   func.count().label("rows"), func.count(distinct(p.cell_id)).label("cells"),
+                   func.max(p.run_id).label("latest_run"))
+            .where(p.is_current), conn)
         arch = pd.read_sql(
-            "SELECT MIN(date) AS first_day, MAX(date) AS last_day, "
-            "COUNT(DISTINCT cell_id) AS cells FROM feature_engineered WHERE source = 'archive'",
-            conn)
+            select(func.min(f.date).label("first_day"), func.max(f.date).label("last_day"),
+                   func.count(distinct(f.cell_id)).label("cells"))
+            .where(f.source == "archive"), conn)
     print("\nArchive features:")
     print(arch.to_string(index=False))
     print("\nCurrent predictions:")

@@ -161,3 +161,36 @@ def test_prune_keeps_current_predictions():
     assert query("SELECT COUNT(*) AS n FROM prediction WHERE is_current = 1")["n"][0] == before
     assert query("SELECT COUNT(*) AS n FROM prediction WHERE is_current = 0")["n"][0] == 0
     assert query("SELECT COUNT(*) AS n FROM weather_daily WHERE source = 'archive'")["n"][0] == 140
+
+
+def test_history_update_starts_after_last_archive_day():
+    """--update fetches from the day after each cell's last archive day, however long ago."""
+    from backend.api.weather import archive_last_dates
+    from Scripts import fetch_weather_history as hist
+
+    last = archive_last_dates()[CELL_A]
+    new_cell = (-35.0, 149.0)   # no archive at all -> starts at --start
+    end = str((last + pd.Timedelta(days=400)).date())
+    jobs = hist.db_gap_jobs([CELL_A, new_cell], "2023-12-01", end)
+    assert jobs == {
+        (str((last + pd.Timedelta(days=1)).date()), end): [CELL_A],
+        ("2023-12-01", end): [new_cell],
+    }
+    assert hist.db_gap_jobs([CELL_A], "2023-12-01", str(last.date())) == {}
+
+
+def test_archive_extended_backwards_is_rebuilt():
+    """Earlier days added to a cell's history rebuild its features as one series."""
+    cell = (-36.0, 148.0)
+    load("archive", weather([cell], "2026-03-01", "2026-03-31", seed=5))
+    assert build_archive_features() == 31
+    load("archive", weather([cell], "2026-02-01", "2026-02-28", seed=6))
+    assert build_archive_features() == 59   # all of the cell's days, not only the new ones
+
+    stored = query(f"""SELECT w.cell_id, w.date, w.temperature_2m, w.precipitation, f.kbdi
+                       FROM feature_engineered f JOIN weather_daily w USING (weather_id)
+                       JOIN grid_cell g ON g.cell_id = w.cell_id
+                       WHERE f.source = 'archive' AND g.lat_round = {cell[0]} AND g.lon_round = {cell[1]}
+                       ORDER BY w.date""")
+    expected = run_kbdi(stored[["cell_id", "date", "temperature_2m", "precipitation"]])
+    np.testing.assert_allclose(stored["kbdi"], expected["kbdi"], rtol=1e-12)

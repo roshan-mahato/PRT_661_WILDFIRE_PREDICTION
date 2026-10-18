@@ -7,13 +7,19 @@ indexed query -- no feature engineering or model inference per request.
 """
 
 from datetime import date as date_type
+from datetime import timedelta
 from typing import Callable, Optional
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import delete, exists, select, text, update
+from sqlalchemy.orm import aliased
 
 from backend.api.weather import WEATHER_VARS, utc_now
 from backend.database import engine, write_lock
+from backend.db_model.feature_engineered import FeatureEngineered
+from backend.db_model.fetch_run import FetchRun
+from backend.db_model.prediction import Prediction
+from backend.db_model.weather_daily import WeatherDaily
 from Scripts.prediction_engine import (
     DAILY_PEAK_COLS, load_model_bundle, model_version, predict_from_features, round_to_grid,
 )
@@ -40,6 +46,8 @@ def predict_run(run_id: int, log: Callable[[str], None] = print) -> int:
     """
     version = model_version()
     bundle = load_model_bundle()
+    # Raw SQL on purpose (this read and the insert below): SQLAlchemy measured
+    # 1.12x / 2.8x slower here.
     weather_cols = ", ".join(f"w.{v}" for v in WEATHER_VARS + DAILY_PEAK_COLS)
     with engine.connect() as conn:
         df = pd.read_sql(text(f"""
@@ -71,25 +79,24 @@ def predict_run(run_id: int, log: Callable[[str], None] = print) -> int:
 
     sql = (f"INSERT INTO prediction ({', '.join(PREDICTION_INSERT_COLS)}) "
            f"VALUES ({', '.join('?' * len(PREDICTION_INSERT_COLS))})")
+    p = Prediction
+    new, cur = aliased(Prediction, name="n"), aliased(Prediction, name="c")
     with write_lock, engine.begin() as conn:
         if rows:
             conn.exec_driver_sql(sql, rows)
         # Hand "current" over to this run for the cell-days it covers -- but
         # never take it from a NEWER run (e.g. when re-predicting an old run).
-        conn.execute(text("""
-            UPDATE prediction SET is_current = 0
-            WHERE is_current = 1 AND run_id <= :run
-              AND EXISTS (SELECT 1 FROM prediction n
-                          WHERE n.run_id = :run AND n.model_version = :mv
-                            AND n.cell_id = prediction.cell_id AND n.date = prediction.date)
-        """), {"run": run_id, "mv": version})
-        conn.execute(text("""
-            UPDATE prediction SET is_current = 1
-            WHERE run_id = :run AND model_version = :mv
-              AND NOT EXISTS (SELECT 1 FROM prediction c
-                              WHERE c.is_current = 1 AND c.cell_id = prediction.cell_id
-                                AND c.date = prediction.date)
-        """), {"run": run_id, "mv": version})
+        conn.execute(
+            update(p)
+            .where(p.is_current, p.run_id <= run_id,
+                   exists().where(new.run_id == run_id, new.model_version == version,
+                                  new.cell_id == p.cell_id, new.date == p.date))
+            .values(is_current=False))
+        conn.execute(
+            update(p)
+            .where(p.run_id == run_id, p.model_version == version,
+                   ~exists().where(cur.is_current, cur.cell_id == p.cell_id, cur.date == p.date))
+            .values(is_current=True))
     log(f"Predictions: {n:,} written for run {run_id} (model {version}).")
     return n
 
@@ -109,6 +116,7 @@ def get_current_predictions(
     All filters are optional. latitude/longitude are raw coordinates and are
     snapped to the grid.
     """
+    # Raw SQL on purpose: SQLAlchemy measured 1.11x slower on this API read.
     where, params = ["p.is_current = 1"], {}
     if start_date is not None:
         where.append("p.date >= :start")
@@ -153,28 +161,29 @@ def prune_forecasts(keep_days: int = 90, log: Callable[[str], None] = print) -> 
     Superseded predictions are what lead-time accuracy is measured on, so
     only prune after you have evaluated them.
     """
-    # Same format as the stored issued_at (with microseconds), so the string
-    # comparison is exact.
-    cutoff = (pd.Timestamp(utc_now()) - pd.Timedelta(days=keep_days)).strftime("%Y-%m-%d %H:%M:%S.%f")
-    old = "SELECT run_id FROM fetch_run WHERE source = 'forecast' AND issued_at < :cutoff"
+    p, f, w, r = Prediction, FeatureEngineered, WeatherDaily, FetchRun
+    cutoff = utc_now() - timedelta(days=keep_days)
+    # Not correlated: the same list of runs inside every DELETE, fetch_run's too.
+    old = (select(r.run_id).where(r.source == "forecast", r.issued_at < cutoff)
+           .correlate(None).scalar_subquery())
     with write_lock, engine.begin() as conn:
-        n_pred = conn.execute(text(
-            f"DELETE FROM prediction WHERE is_current = 0 AND run_id IN ({old})"
-        ), {"cutoff": cutoff}).rowcount
-        n_feat = conn.execute(text(f"""
-            DELETE FROM feature_engineered WHERE source = 'forecast'
-              AND weather_id IN (SELECT weather_id FROM weather_daily WHERE run_id IN ({old}))
-              AND NOT EXISTS (SELECT 1 FROM prediction p WHERE p.weather_id = feature_engineered.weather_id)
-        """), {"cutoff": cutoff}).rowcount
-        n_weather = conn.execute(text(f"""
-            DELETE FROM weather_daily WHERE source = 'forecast' AND run_id IN ({old})
-              AND NOT EXISTS (SELECT 1 FROM feature_engineered f WHERE f.weather_id = weather_daily.weather_id)
-        """), {"cutoff": cutoff}).rowcount
-        n_runs = conn.execute(text(f"""
-            DELETE FROM fetch_run WHERE run_id IN ({old})
-              AND NOT EXISTS (SELECT 1 FROM weather_daily w WHERE w.run_id = fetch_run.run_id)
-              AND NOT EXISTS (SELECT 1 FROM prediction p WHERE p.run_id = fetch_run.run_id)
-        """), {"cutoff": cutoff}).rowcount
+        n_pred = conn.execute(
+            delete(p).where(~p.is_current, p.run_id.in_(old))
+        ).rowcount
+        n_feat = conn.execute(
+            delete(f).where(f.source == "forecast",
+                            f.weather_id.in_(select(w.weather_id).where(w.run_id.in_(old))),
+                            ~exists().where(p.weather_id == f.weather_id))
+        ).rowcount
+        n_weather = conn.execute(
+            delete(w).where(w.source == "forecast", w.run_id.in_(old),
+                            ~exists().where(f.weather_id == w.weather_id))
+        ).rowcount
+        n_runs = conn.execute(
+            delete(r).where(r.run_id.in_(old),
+                            ~exists().where(w.run_id == r.run_id),
+                            ~exists().where(p.run_id == r.run_id))
+        ).rowcount
     counts = {"prediction": n_pred, "feature_engineered": n_feat,
               "weather_daily": n_weather, "fetch_run": n_runs}
     log(f"Pruned forecasts issued before {cutoff}: {counts}")

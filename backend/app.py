@@ -16,9 +16,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import select
 
 from backend.database import engine
+from backend.db_init import create_tables
 from Scripts.prediction_engine import load_model_bundle
 from backend.routers import model as model_router
 from backend.routers import prediction as prediction_router
@@ -32,7 +33,14 @@ async def lifespan(app: FastAPI):
     first user doesn't pay the joblib deserialisation cost. A failure here is
     logged, not fatal -- /health will report it and the endpoints will return
     503, which is more useful than the whole service refusing to boot.
+
+    Also creates any missing tables, so a fresh or empty database file gets
+    the schema instead of every query failing with "no such table".
     """
+    try:
+        create_tables()
+    except Exception as exc:  # noqa: BLE001 - startup should not hard-fail
+        print(f"WARNING: could not create database tables at startup: {exc}")
     try:
         load_model_bundle()
         print("Model bundle loaded.")
@@ -83,7 +91,7 @@ def health() -> HealthResponse:
 
     try:
         with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+            conn.execute(select(1))
     except Exception as exc:  # noqa: BLE001
         db_ok = False
         problems.append(f"database: {exc}")

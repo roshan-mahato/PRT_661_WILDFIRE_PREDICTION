@@ -18,10 +18,12 @@ The formulas live in Scripts/prediction_engine.py (shared with training).
 from typing import Callable, Iterable
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import delete, func, select, text
 
 from backend.api.weather import utc_now
 from backend.database import engine, write_lock
+from backend.db_model.feature_engineered import FeatureEngineered
+from backend.db_model.weather_daily import WeatherDaily
 from Scripts.prediction_engine import KBDI_RESULT_COLS, compute_ffdi_max, engineer_features
 
 FEATURE_COLS = KBDI_RESULT_COLS + ["emc", "ffdi", "rate_of_spread", "ffdi_max",
@@ -29,6 +31,9 @@ FEATURE_COLS = KBDI_RESULT_COLS + ["emc", "ffdi", "rate_of_spread", "ffdi_max",
 FEATURE_INSERT_COLS = ["weather_id", "cell_id", "date", "source"] + FEATURE_COLS + ["computed_at"]
 CELL_CHUNK = 250   # archive cells per batch (~250k rows for three years)
 
+# Raw SQL on purpose (_WEATHER_SQL, the todo query, _save_features and the
+# ffdi_max update): SQLAlchemy measured 1.15-2x slower on these bulk paths,
+# mostly from converting every date / boolean value to a Python object.
 _WEATHER_SQL = """
 SELECT w.weather_id, w.cell_id, w.date, w.temperature_2m, w.relative_humidity_2m,
        w.wind_speed_10m, w.precipitation, w.peak_fire_temperature_2m,
@@ -45,18 +50,19 @@ def _in_list(ids: Iterable[int]) -> str:
 
 def latest_archive_state(conn, cell_ids: Iterable[int]) -> pd.DataFrame:
     """Each cell's latest archive feature row -- the state to continue from."""
-    ids = _in_list(cell_ids)
+    ids = [int(i) for i in cell_ids]
     if not ids:
         return pd.DataFrame()
-    return pd.read_sql(text(f"""
-        SELECT f.cell_id, f.date, f.kbdi, f.days_since_rain, f.days_since_cell_start,
-               f.last_rain_amt, f.in_rain_event, f.event_cumulative_rain
-        FROM feature_engineered f
-        JOIN (SELECT cell_id, MAX(date) AS date FROM feature_engineered
-              WHERE source = 'archive' AND cell_id IN ({ids}) GROUP BY cell_id) m
-          ON m.cell_id = f.cell_id AND m.date = f.date
-        WHERE f.source = 'archive'
-    """), conn)
+    f = FeatureEngineered
+    last = (select(f.cell_id, func.max(f.date).label("date"))
+            .where(f.source == "archive", f.cell_id.in_(ids))
+            .group_by(f.cell_id)
+            .subquery())
+    query = (select(f.cell_id, f.date, f.kbdi, f.days_since_rain, f.days_since_cell_start,
+                    f.last_rain_amt, f.in_rain_event, f.event_cumulative_rain)
+             .join(last, (last.c.cell_id == f.cell_id) & (last.c.date == f.date))
+             .where(f.source == "archive"))
+    return pd.read_sql(query, conn)
 
 
 def _save_features(feats: pd.DataFrame, source: str) -> int:
@@ -82,6 +88,7 @@ def build_archive_features(log: Callable[[str], None] = print) -> int:
     Computes features for every archive weather row that has none yet.
     Returns the number of feature rows written.
     """
+    f = FeatureEngineered
     with engine.connect() as conn:
         todo = pd.read_sql(text("""
             SELECT w.cell_id, MIN(w.date) AS first_new, COUNT(*) AS n_new
@@ -90,16 +97,19 @@ def build_archive_features(log: Callable[[str], None] = print) -> int:
               AND NOT EXISTS (SELECT 1 FROM feature_engineered f WHERE f.weather_id = w.weather_id)
             GROUP BY w.cell_id
         """), conn)
-        done = pd.read_sql(text("""
-            SELECT cell_id, MAX(date) AS last_done FROM feature_engineered
-            WHERE source = 'archive' GROUP BY cell_id
-        """), conn)
+        done = pd.read_sql(
+            select(f.cell_id, func.max(f.date).label("last_done"))
+            .where(f.source == "archive")
+            .group_by(f.cell_id), conn)
     if todo.empty:
         log("Archive features: up to date.")
         fill_missing_ffdi_max(log)
         return 0
 
     todo = todo.merge(done, on="cell_id", how="left")
+    # todo comes back as text, done as dates; compare both as timestamps.
+    todo["first_new"] = pd.to_datetime(todo["first_new"])
+    todo["last_done"] = pd.to_datetime(todo["last_done"])
     backfill = todo[todo["last_done"].notna() & (todo["first_new"] <= todo["last_done"])]
     if not backfill.empty:
         # Days were added before the cell's latest feature row, so every later
@@ -107,13 +117,11 @@ def build_archive_features(log: Callable[[str], None] = print) -> int:
         # prediction, so they can be rebuilt.
         log(f"Archive features: {len(backfill):,} cell(s) got earlier days -- rebuilding them.")
         with write_lock, engine.begin() as conn:
-            conn.exec_driver_sql(
-                f"DELETE FROM feature_engineered WHERE source = 'archive' "
-                f"AND cell_id IN ({_in_list(backfill['cell_id'])})"
-            )
+            conn.execute(delete(f).where(f.source == "archive",
+                                         f.cell_id.in_(backfill["cell_id"].tolist())))
 
     cont = todo[todo["last_done"].notna() & ~todo["cell_id"].isin(backfill["cell_id"])]
-    gaps = cont[pd.to_datetime(cont["first_new"]) != pd.to_datetime(cont["last_done"]) + pd.Timedelta(days=1)]
+    gaps = cont[cont["first_new"] != cont["last_done"] + pd.Timedelta(days=1)]
     if not gaps.empty:
         log(f"Archive features: WARNING {len(gaps):,} cell(s) have missing days before their "
             f"new rows; the recursion treats the gap as rain-free days.")
@@ -140,13 +148,13 @@ def fill_missing_ffdi_max(log: Callable[[str], None] = print) -> int:
     after the features were built (history re-fetched with the peaks). Only
     fills a NULL; the Drought Factor is already stored on the row.
     """
+    w, f = WeatherDaily, FeatureEngineered
+    query = (select(f.weather_id, f.drought_factor, w.peak_fire_temperature_2m,
+                    w.peak_fire_relative_humidity_2m, w.peak_fire_wind_speed_10m)
+             .join(w, w.weather_id == f.weather_id)
+             .where(f.ffdi_max.is_(None), w.peak_fire_temperature_2m.is_not(None)))
     with engine.connect() as conn:
-        rows = pd.read_sql(text("""
-            SELECT f.weather_id, f.drought_factor, w.peak_fire_temperature_2m,
-                   w.peak_fire_relative_humidity_2m, w.peak_fire_wind_speed_10m
-            FROM feature_engineered f JOIN weather_daily w ON w.weather_id = f.weather_id
-            WHERE f.ffdi_max IS NULL AND w.peak_fire_temperature_2m IS NOT NULL
-        """), conn)
+        rows = pd.read_sql(query, conn)
     if rows.empty:
         return 0
     rows["ffdi_max"] = compute_ffdi_max(rows)
