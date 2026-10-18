@@ -19,6 +19,9 @@ This script covers everything else.
     status         row counts, recent fetch runs, current predictions
     prune          delete forecast runs older than --keep-days (keeps the
                    rows behind current predictions; archive is never touched)
+    setup          first run on a new machine, safe to repeat: init, load
+                   the history CSV if the database has none, then daily.
+                   setup.ps1 (repo root) runs it after the prerequisites.
     daily          the scheduled job: start Open-Meteo if it is down, run
                    fetch_weather_live.py (history to yesterday + forecast +
                    predictions), then prune. Logs to logs/daily_<date>.log.
@@ -34,6 +37,7 @@ USAGE
     uv run python Scripts/pipeline.py status
     uv run python Scripts/pipeline.py prune --keep-days 90
     uv run python Scripts/pipeline.py daily
+    uv run python Scripts/pipeline.py setup
 ================================================================================
 """
 
@@ -63,6 +67,8 @@ from backend.db_model.prediction import Prediction
 
 DEFAULT_PARTS_DIR = os.path.join(REPO_ROOT, "data", "full_grid_parts")
 CSV_CHUNK_ROWS = 200_000
+HISTORY_CSV = os.path.join(REPO_ROOT, "data", "full_grid_daily_weather.csv")
+LAND_MASK_CSV = os.path.join(REPO_ROOT, "data", "full_grid_land_mask.csv")
 LOG_DIR = os.path.join(REPO_ROOT, "logs")
 LIVE_SCRIPT = os.path.join(REPO_ROOT, "Scripts", "fetch_weather_live.py")
 SERVER_POLL_SECONDS = 5
@@ -259,6 +265,35 @@ def cmd_daily(args):
         log.close()
 
 
+def is_lfs_pointer(path: str) -> bool:
+    """True if `path` is a Git LFS pointer (the real file was never pulled)."""
+    with open(path, "rb") as f:
+        return f.read(40).startswith(b"version https://git-lfs")
+
+
+def cmd_setup(args):
+    """
+    First run on a new machine, safe to repeat: tables and land mask, the
+    weather history from the combined CSV when the database has none, then
+    the daily job (history up to yesterday, 7-day forecast, predictions,
+    prune). Exits like `daily`.
+    """
+    for path in (LAND_MASK_CSV, args.csv):
+        if not os.path.exists(path) or is_lfs_pointer(path):
+            sys.exit(f"{os.path.relpath(path, REPO_ROOT)} is missing or still a Git LFS pointer. "
+                     f"Run `git lfs pull` in the repo, then try again.")
+    init_db()
+    last = weather.archive_last_dates()
+    if last:
+        print(f"Weather history already loaded: {len(last):,} cells, "
+              f"up to {max(last.values()).date()}.")
+    else:
+        print(f"No weather history in the database yet -- loading "
+              f"{os.path.relpath(args.csv, REPO_ROOT)} (several minutes).")
+        cmd_load_history(argparse.Namespace(csv=args.csv, parts=DEFAULT_PARTS_DIR))
+    cmd_daily(args)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -286,11 +321,16 @@ def main():
     p.add_argument("--keep-days", type=int, default=90)
     p.set_defaults(func=cmd_prune)
 
-    p = sub.add_parser("daily", help="Scheduled job: fetch + predict, then prune")
-    p.add_argument("--keep-days", type=int, default=90, help="Prune forecast runs older than this")
-    p.add_argument("--wait", type=int, default=300,
-                   help="Seconds to wait for Open-Meteo after starting it")
-    p.set_defaults(func=cmd_daily)
+    for name, func, help_text in (
+        ("daily", cmd_daily, "Scheduled job: fetch + predict, then prune"),
+        ("setup", cmd_setup, "First run: init, load the history CSV if needed, then daily"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--keep-days", type=int, default=90, help="Prune forecast runs older than this")
+        p.add_argument("--wait", type=int, default=300,
+                       help="Seconds to wait for Open-Meteo after starting it")
+        p.set_defaults(func=func)
+    p.add_argument("--csv", default=HISTORY_CSV, help="History to load when the database has none")
 
     args = parser.parse_args()
     args.func(args)

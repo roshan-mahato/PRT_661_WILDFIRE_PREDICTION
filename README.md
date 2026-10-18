@@ -138,6 +138,30 @@ Key references and full citation list are available in the project proposal repo
 - [Suggested Development Flow](#suggested-development-flow)
 - [Notes](#notes)
 
+## Quick Start (Windows, one command)
+
+From the repo root, double-click `setup.cmd`, or run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+It installs uv and Python 3.12 if missing, installs the packages, pulls the
+Git LFS data, checks Docker (asks you to install Docker Desktop if it is
+missing, starts it if it is not running) and the Open-Meteo container,
+creates the database and loads the weather history (first run only), fetches
+the history up to yesterday plus the 7-day forecast and predictions, then
+opens the API (http://127.0.0.1:8000/docs) and the dashboard
+(http://localhost:8501) in their own windows. Running it again only fetches
+the days since the last run.
+
+- No Docker: `setup.ps1 -PublicApi` uses the public Open-Meteo API instead.
+- Just start the app: `setup.ps1 -SkipPipeline`.
+- Keep the data fresh every day: `powershell -ExecutionPolicy Bypass -File Scripts\schedule_daily.ps1`.
+
+The first run takes a while: loading ~3M history rows and building their
+features takes several minutes.
+
 ## Project Setup Instructions
 
 ### 1. Clone or open the project
