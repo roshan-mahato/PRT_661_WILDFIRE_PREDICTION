@@ -29,6 +29,19 @@ REGIONS = [
     "Australian Capital Territory",
 ]
 
+# State codes used in the town list (assets/towns.json).
+STATE_CODES = {
+    "New South Wales": "NSW",
+    "Victoria": "VIC",
+    "Queensland": "QLD",
+    "Western Australia": "WA",
+    "South Australia": "SA",
+    "Tasmania": "TAS",
+    "Northern Territory": "NT",
+    "Australian Capital Territory": "ACT",
+}
+STATE_NAMES = {code: name for name, code in STATE_CODES.items()}
+
 # (lat_min, lat_max, lon_min, lon_max) -- approximate, rectangular.
 #
 # Real state borders are irregular (the NSW/Victoria border follows the Murray

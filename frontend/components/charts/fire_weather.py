@@ -10,7 +10,8 @@ next has a visible reason.
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from core.chart_data import capitalise, daily_fire_weather
+from core.chart_data import capitalise, daily_fire_weather, daily_town_fire_weather
+from core.focus import town_rows
 from core.danger import FFDI_BANDS, ffdi_band_name
 from core.places import describe_location
 from utils.glossary import term
@@ -47,12 +48,19 @@ def _band_shapes(y_max: float) -> tuple:
     return shapes, labels
 
 
-def render_fire_weather(predictions: pd.DataFrame) -> None:
-    chart_title(
-        "Fire Weather This Week",
-        f"The weather behind the forecast: fire danger ({term('ffdi')}) at the worst "
-        "place and in a typical area &middot; shaded by danger band",
-    )
+def render_fire_weather(predictions: pd.DataFrame, focus=None) -> None:
+    """
+    Region mode: the worst place (solid) and a typical area (dashed).
+    Town focus: the searched town's own area (solid) and the worst place
+    within the radius (dashed).
+    """
+    if focus is None:
+        subtitle = (f"The weather behind the forecast: fire danger ({term('ffdi')}) at the worst "
+                    "place and in a typical area &middot; shaded by danger band")
+    else:
+        subtitle = (f"Fire danger ({term('ffdi')}) in {focus.name}'s area and at the worst "
+                    f"place within {focus.radius_km} km &middot; shaded by danger band")
+    chart_title("Fire Weather This Week", subtitle)
     if predictions is None or predictions.empty:
         st.info("No forecast data available for this region.")
         return
@@ -66,6 +74,10 @@ def render_fire_weather(predictions: pd.DataFrame) -> None:
         for lat, lon in zip(weather["worst_lat"], weather["worst_lon"])
     ]
     fig = go.Figure()
+    if focus is not None:
+        _add_town_traces(fig, weather, days, worst_places, marker_size, focus, town_rows(predictions, focus))
+        _finish(fig, weather)
+        return
     fig.add_trace(go.Scatter(
         x=days, y=weather["worst_ffdi"], name="Worst place",
         mode="lines+markers",
@@ -94,6 +106,44 @@ def render_fire_weather(predictions: pd.DataFrame) -> None:
         ),
     ))
 
+    _finish(fig, weather)
+
+
+def _add_town_traces(fig, weather, days, worst_places, marker_size, focus, town) -> None:
+    """Town focus: the town's own area (solid) and the worst place nearby (dashed)."""
+    own = daily_town_fire_weather(town).set_index("date").reindex(weather["date"])
+    fig.add_trace(go.Scatter(
+        x=days, y=own["town_ffdi"], name=f"{focus.name}'s area",
+        mode="lines+markers",
+        line=dict(color=COLORS["ember"], width=2.5, shape="spline", smoothing=0.6),
+        marker=dict(size=marker_size, line=dict(color=COLORS["surface"], width=2)),
+        customdata=list(zip(
+            [ffdi_band_name(v) if pd.notna(v) else "No forecast" for v in own["town_ffdi"]],
+            own["town_weather"].fillna(""),
+        )),
+        hovertemplate=(
+            f"%{{x}}<br><b>{focus.name}: %{{customdata[0]}} fire weather</b> (FFDI %{{y:.0f}})"
+            "<br>%{customdata[1]}<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Scatter(
+        x=days, y=weather["worst_ffdi"], name=f"Worst within {focus.radius_km} km",
+        mode="lines+markers",
+        line=dict(color=COLORS["text_muted"], width=1.6, dash="dash"),
+        marker=dict(size=marker_size - 2, line=dict(color=COLORS["surface"], width=2)),
+        customdata=list(zip(
+            [ffdi_band_name(v) for v in weather["worst_ffdi"]], worst_places,
+            weather["worst_weather"],
+        )),
+        hovertemplate=(
+            "%{x}<br><b>Worst nearby: %{customdata[0]} fire weather</b> (FFDI %{y:.0f})"
+            "<br>%{customdata[1]}<br>%{customdata[2]}<extra></extra>"
+        ),
+    ))
+
+
+def _finish(fig, weather) -> None:
+    """Danger bands, axes and layout shared by both modes, then draw."""
     peak = float(weather["worst_ffdi"].max())
     y_max = next((b for b in Y_AXIS_STEPS if b > peak * 1.15), peak * 1.15)
     shapes, band_labels = _band_shapes(y_max)

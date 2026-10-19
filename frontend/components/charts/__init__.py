@@ -30,33 +30,39 @@ __all__ = [
 ]
 
 
-def render_insights_section(predictions: pd.DataFrame, day_predictions: pd.DataFrame) -> None:
+def render_insights_section(predictions: pd.DataFrame, day_predictions: pd.DataFrame,
+                            focus=None, nearby=None, nearby_km: float = 0) -> None:
     """
     Renders the full 'Insights' section: a 2x2 grid of charts.
 
     Args:
-        predictions: the region's prediction rows across every forecast day.
+        predictions: the region's prediction rows across every forecast day
+                     (in town focus: the area within the radius of the town).
         day_predictions: the same rows narrowed to the day selected in the
                          day strip (chart 3 describes that day).
+        focus: core.focus.Focus when a town is searched, else None.
+        nearby: town focus only -- neighbouring towns for chart 3.
+        nearby_km: town focus only -- how far chart 3 looked for them.
     """
-    section_header(
-        "Insights",
-        "How the forecast develops",
-        "The weather behind the risk, how widespread it is, and which places are affected.",
-    )
+    if focus is None:
+        subtitle = "The weather behind the risk, how widespread it is, and which places are affected."
+    else:
+        subtitle = (f"Around {focus.town}: the weather behind the risk, how widespread it is "
+                    "within the chosen radius, and which nearby places are affected.")
+    section_header("Insights", "How the forecast develops", subtitle)
 
     row1_col1, row1_col2 = st.columns(2, gap="medium")
     with row1_col1:
         with st.container(key="card-weather"):
-            render_fire_weather(predictions)
+            render_fire_weather(predictions, focus)
     with row1_col2:
         with st.container(key="card-outlook"):
-            render_risk_outlook(predictions)
+            render_risk_outlook(predictions, focus)
 
     row2_col1, row2_col2 = st.columns(2, gap="medium")
     with row2_col1:
         with st.container(key="card-places"):
-            render_places_affected(day_predictions)
+            render_places_affected(day_predictions, focus, nearby, nearby_km)
     with row2_col2:
         with st.container(key="card-hotspots"):
-            render_persistent_hotspots(predictions)
+            render_persistent_hotspots(predictions, focus)
