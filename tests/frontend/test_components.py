@@ -227,3 +227,64 @@ def test_theme_variables_cover_every_colour_used_in_css():
     defined = set(re.findall(r"(--[a-z0-9-]+):", styles.theme_variables()))
     used = set(re.findall(r"var\((--(?:c|font)-[a-z0-9-]+)\)", css))
     assert used <= defined, used - defined
+
+
+# ----------------------------------------------------------------------------
+# Map performance: one layer, canvas, cached
+# ----------------------------------------------------------------------------
+import json  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def test_map_is_one_canvas_layer(predictions):
+    html = map_section._build_map(predictions, "Australia (National)").get_root().render()
+    assert '"preferCanvas": true' in html
+    assert html.count('"type": "Point"') == len(predictions)   # every area in one GeoJSON layer
+    assert html.count("L.circleMarker(") == 0                    # no per-area objects
+
+
+def test_popup_fields(predictions):
+    row = next(predictions[predictions["kbdi_spinup_flag"]].itertuples(index=False))
+    f = map_section._popup_fields(row)
+    assert f["lv"] == "High" and f["pr"] == "60.0%" and f["sp"] == 1
+    assert f["ff"] == "30.0 (Very High)"
+    assert f["tip"].startswith("High 60% — ")
+    assert f["cell"] == "36.0°S, 147.0°E"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_popup_built_in_the_browser_reads_as_before(predictions):
+    """The popup is assembled in JavaScript from _popup_fields(); check the
+    exact text against the markup the dashboard has always shown."""
+    rows = list(predictions[predictions["acq_date"].dt.date == TODAY].itertuples(index=False))
+    fields = [map_section._popup_fields(r) for r in rows]
+    script = ("const popup = " + map_section._POPUP_JS + ";"
+              "process.stdout.write(JSON.stringify(JSON.parse(require('fs').readFileSync(0,'utf8')).map(popup)));")
+    out = subprocess.run(["node", "-e", script], input=json.dumps(fields),
+                         capture_output=True, text=True, check=True).stdout
+    popups = json.loads(out)
+    for f, html in zip(fields, popups):
+        assert html == (
+            "<div style='font-family:Inter,sans-serif;font-size:12px;line-height:1.55'>"
+            f"<b style='color:{f['c']};font-size:13px'>{f['lv']} risk</b> "
+            f"<span style='color:#57534E'>{f['pl']}</span><br>"
+            f"Fire probability: <b>{f['pr']}</b><br>"
+            f"<b>Why:</b> {f['why']}<br>"
+            f"FFDI: {f['ff']}<br>"
+            f"KBDI: {f['kb']} &middot; Drought factor: {f['dfc']}<br>"
+            f"Temp: {f['t']}&deg;C &middot; RH: {f['rh']}% &middot; Wind: {f['w']} km/h<br>"
+            f"<span style='color:#8A847B'>Cell {f['cell']}</span>"
+            + ("<br><i>Low confidence: cell has under 30 days of history.</i>" if f["sp"] else "")
+            + "</div>"
+        )
+
+
+def test_map_html_is_cached(predictions):
+    map_section.map_html.clear()
+    first = map_section.map_html(predictions, "Victoria")
+    second = map_section.map_html(predictions, "Victoria")
+    # Folium gives every build new random element ids, so identical HTML
+    # proves the second call came from the cache rather than a rebuild.
+    assert first == second
+    assert map_section._build_map(predictions, "Victoria").get_root().render() != first

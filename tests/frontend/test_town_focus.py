@@ -255,7 +255,7 @@ def test_town_map_is_the_full_heat_map_centred_on_the_town(predictions):
     focus = F.make_focus(predictions, "Albury, NSW", 50)
     html = map_section._build_map(tomorrow, "Australia (National)", focus).get_root().render()
 
-    assert html.count("L.circleMarker(") == len(tomorrow)     # every area, not just nearby
+    assert html.count('"type": "Point"') == len(tomorrow)     # every area, not just nearby
     assert "HeatLayer" in html or "heatLayer" in html
     assert "L.marker(" in html                                # pin on the town
     assert "L.circle(" not in html                            # no radius circle...
