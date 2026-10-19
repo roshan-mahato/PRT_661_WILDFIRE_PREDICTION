@@ -45,6 +45,16 @@ def daily_fire_weather(predictions: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def daily_town_fire_weather(town_rows: pd.DataFrame) -> pd.DataFrame:
+    """Per forecast day, for one town's forecast area: its FFDI and weather."""
+    rows = [
+        {"date": day, "town_ffdi": float(group["ffdi"].iloc[0]),
+         "town_weather": weather_words(group.iloc[0])}
+        for day, group in town_rows.groupby(day_dates(town_rows), sort=True)
+    ]
+    return pd.DataFrame(rows, columns=["date", "town_ffdi", "town_weather"])
+
+
 # --- Chart 2: how widespread ----------------------------------------------------
 def daily_risk_shares(predictions: pd.DataFrame) -> tuple:
     """

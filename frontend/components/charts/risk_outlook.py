@@ -17,10 +17,12 @@ from utils.theme import COLORS
 from components.charts._common import GRID_COLOR, base_layout, chart_title, legend_top, show_chart
 
 
-def render_risk_outlook(predictions: pd.DataFrame) -> None:
+def render_risk_outlook(predictions: pd.DataFrame, focus=None) -> None:
+    """In town focus, `predictions` is the area within the radius of the town."""
+    where = "the region" if focus is None else f"the area within {focus.radius_km} km of {focus.name}"
     chart_title(
         "How Widespread Is the Risk?",
-        "Share of the region at each risk level, by day &middot; "
+        f"Share of {where} at each risk level, by day &middot; "
         "label = share at High or Extreme",
     )
     if predictions is None or predictions.empty:

@@ -8,7 +8,7 @@ import pandas as pd
 
 from utils.glossary import term
 from core.danger import RISK_ORDER, ffdi_band
-from core.geography import is_national
+from core.geography import STATE_NAMES, is_national
 from core.places import describe_location, format_coords
 from utils.styles import html, icon
 from utils.theme import COLORS
@@ -137,6 +137,90 @@ def render_hero(summary: dict, region: str, source_label: str) -> None:
             <div class="hero-mini">
               <div>Regional average<b>{summary["mean_probability"]:.0%}</b></div>
               <div>Peak {term("ffdi")}<b>{summary["max_ffdi"]:.1f} · {ffdi_band(summary["max_ffdi"])}</b></div>
+            </div>
+          </div>
+        </div>
+        """
+    )
+
+
+def _empty_hero(eyebrow: str, title: str, text: str) -> None:
+    html(
+        f"""
+        <div class="hero empty" style="--sev-light:#B8ADA3;--sev-glow:rgba(184, 173, 163, 0.25);">
+          <div>
+            <div class="hero-eyebrow"><span>{icon("pin", 13)} {eyebrow}</span></div>
+            <div class="hero-title">{title}</div>
+            <div class="hero-text">{text}</div>
+          </div>
+        </div>
+        """
+    )
+
+
+def render_town_hero(focus, town_row, area_summary: dict, source_label: str) -> None:
+    """
+    Banner for town focus: the searched town's own risk for the selected day,
+    how much of the area around it is at risk, and the state fire service.
+
+    Args:
+        focus: core.focus.Focus for the searched town.
+        town_row: the town's forecast row for the selected day (None if missing).
+        area_summary: core.summaries.summarise_region() of the area within the radius.
+        source_label: where the numbers came from.
+    """
+    if town_row is None or not area_summary.get("has_data"):
+        _empty_hero(
+            focus.town,
+            f"No forecast near {focus.name}",
+            f"There is no forecast area within reach of {focus.town} in the current data. "
+            "Try another town, clear the search, or press <b>Refresh</b>.",
+        )
+        return
+
+    level = str(town_row["risk_level"])
+    light, glow = SEVERITY_ON_DARK[level]
+    day = pd.Timestamp(area_summary["forecast_date"])
+    authority, url = FIRE_AUTHORITIES.get(STATE_NAMES.get(focus.state, ""), NATIONAL_AUTHORITY)
+    cells, at_risk = area_summary["cell_count"], area_summary["at_risk_count"]
+    share = at_risk / cells if cells else 0
+    ffdi = float(town_row["ffdi"])
+    fallback = (
+        f" {focus.name}'s own area has no forecast, so this uses the nearest forecast "
+        f"area, about {int(round(focus.offset_km / 5) * 5)} km {focus.offset_direction}."
+        if not focus.own_area else ""
+    )
+
+    html(
+        f"""
+        <div class="hero" style="--sev-light:{light};--sev-glow:{glow};">
+          <div>
+            <div class="hero-eyebrow">
+              <span>{icon("pin", 13)} {focus.town} · within {focus.radius_km} km</span>
+              <span>{icon("calendar", 13)} {day.strftime("%A %d %B %Y")}</span>
+            </div>
+            <div class="hero-title"><span class="level">{level}</span> fire risk in {focus.name}</div>
+            <div class="hero-text">
+              The chance of fire in {focus.name}'s area is <b>{float(town_row["fire_probability"]):.0%}</b>.
+              Within {focus.radius_km} km, <b>{at_risk} of {cells}</b>
+              {term("grid_cell", "areas")} ({share:.0%}) are at High or Extreme risk.{fallback}
+            </div>
+            <div class="hero-advice">
+              {icon("alert", 18)}
+              <div>{ADVICE[level].replace("this region", "this area")} Official warnings:
+                <a href="{url}" target="_blank" rel="noopener">{authority}</a>.</div>
+            </div>
+            <div class="hero-meta">{icon("database", 13)} Showing {cells} grid cell(s)
+              within {focus.radius_km} km of {focus.town} — forecast day {area_summary["forecast_date"]},
+              {source_label}.</div>
+          </div>
+          <div class="hero-gauge">
+            <div class="hero-gauge-label">{term("probability", "Fire probability")} in {focus.name}</div>
+            <div class="hero-gauge-value">{float(town_row["fire_probability"]) * 100:.0f}<small>%</small></div>
+            {_scale(level)}
+            <div class="hero-mini">
+              <div>Area average<b>{area_summary["mean_probability"]:.0%}</b></div>
+              <div>{term("ffdi")} in {focus.name}<b>{ffdi:.1f} · {ffdi_band(ffdi)}</b></div>
             </div>
           </div>
         </div>

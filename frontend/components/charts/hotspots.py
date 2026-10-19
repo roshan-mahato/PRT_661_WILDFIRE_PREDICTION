@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from config import HOTSPOT_ROWS
 from core.chart_data import day_dates, hotspot_labels
+from core.focus import town_timeline
 from core.hotspots import persistent_hotspots
 from utils.theme import COLORS
 
@@ -26,8 +27,12 @@ SLOT_GROUPS = (
 )
 
 
-def _headline(all_hotspots: pd.DataFrame, n_days: int) -> str:
+def _headline(all_hotspots: pd.DataFrame, n_days: int, focus=None) -> str:
     every_day = int((all_hotspots["days_elevated"] == n_days).sum())
+    if focus is not None:
+        noun = "place is" if every_day == 1 else "places are"
+        return (f"Within {focus.radius_km} km of {focus.name}, <b>{every_day}</b> {noun} at "
+                f"High or Extreme risk on all {n_days} days.")
     if n_days == 1:
         return f"<b>{len(all_hotspots)}</b> places are at High or Extreme risk on this forecast day."
     if every_day:
@@ -37,10 +42,17 @@ def _headline(all_hotspots: pd.DataFrame, n_days: int) -> str:
             f"none stays there all {n_days} days.")
 
 
-def render_persistent_hotspots(predictions: pd.DataFrame) -> None:
+def render_persistent_hotspots(predictions: pd.DataFrame, focus=None) -> None:
+    """
+    Region mode: the most persistent places in the region.
+    Town focus: the searched town's own area as the first row (even when it
+    never reaches High), then the most persistent places around it.
+    """
     days_all = sorted(day_dates(predictions).unique()) if predictions is not None and not predictions.empty else []
     all_hotspots = persistent_hotspots(predictions, top=None)
     hotspots = all_hotspots.head(HOTSPOT_ROWS)
+    if focus is not None and days_all:
+        hotspots = town_timeline(predictions, focus, HOTSPOT_ROWS)
 
     if hotspots.empty:
         chart_title("Where the Danger Lasts", "Places at High or Extreme risk, day by day")
@@ -51,10 +63,15 @@ def render_persistent_hotspots(predictions: pd.DataFrame) -> None:
         return
 
     n_days = len(days_all)
-    chart_title("Where the Danger Lasts",
-                f"{_headline(all_hotspots, n_days)} The {len(hotspots)} most persistent, day by day.")
+    if focus is None:
+        detail = f"The {len(hotspots)} most persistent, day by day."
+    else:
+        detail = f"{focus.name} first, then the most persistent places around it."
+    chart_title("Where the Danger Lasts", f"{_headline(all_hotspots, n_days, focus)} {detail}")
 
     labels = hotspot_labels(hotspots)
+    if focus is not None:
+        labels[0] = f"<b>{focus.town}</b>"   # the searched town's own area
     label_of = {(r.lat_round, r.lon_round): lab
                 for r, lab in zip(hotspots.itertuples(index=False), labels)}
     cells = predictions.assign(day=day_dates(predictions))

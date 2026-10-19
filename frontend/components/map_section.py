@@ -3,6 +3,7 @@ Map panel: plots predicted fire risk per grid cell, with a region threat
 summary alongside it.
 """
 
+import math
 from typing import Optional
 
 import folium
@@ -42,8 +43,30 @@ def _pill(level: str) -> str:
     return f'<span class="pill" style="color:{colour};background:{bg}"><span class="dot"></span>{level}</span>'
 
 
-def _build_map(predictions: pd.DataFrame, region: str) -> folium.Map:
+def _focus_bounds(focus) -> list:
+    """South-west and north-east corners of the radius around the town."""
+    dlat = focus.radius_km / 111.32
+    dlon = focus.radius_km / (111.32 * max(math.cos(math.radians(focus.lat)), 0.1))
+    return [[focus.lat - dlat, focus.lon - dlon], [focus.lat + dlat, focus.lon + dlon]]
+
+
+def _add_focus_marks(m: folium.Map, focus) -> None:
+    """Dashed circle for the searched area and a pin on the town."""
+    folium.Circle(
+        location=[focus.lat, focus.lon], radius=focus.radius_km * 1000,
+        color=COLORS["ink"], weight=2, dash_array="6 6", fill=False,
+        tooltip=f"Within {focus.radius_km} km of {focus.town}",
+    ).add_to(m)
+    folium.Marker(
+        location=[focus.lat, focus.lon], tooltip=focus.town,
+        icon=folium.Icon(color="darkred", icon="map-marker", prefix="fa"),
+    ).add_to(m)
+
+
+def _build_map(predictions: pd.DataFrame, region: str, focus=None) -> folium.Map:
     center, zoom = get_region_view(region)
+    if focus is not None:
+        center = [focus.lat, focus.lon]
     m = folium.Map(
         location=center,
         zoom_start=zoom,
@@ -59,7 +82,10 @@ def _build_map(predictions: pd.DataFrame, region: str) -> folium.Map:
     )
     # A fixed zoom can't suit every state (Tasmania vs Western Australia), so
     # frame the state's own bounding box instead.
-    if not is_national(region) and region in STATE_BOUNDS:
+    if focus is not None:
+        m.fit_bounds(_focus_bounds(focus), padding=(12, 12))
+        _add_focus_marks(m, focus)
+    elif not is_national(region) and region in STATE_BOUNDS:
         lat_min, lat_max, lon_min, lon_max = STATE_BOUNDS[region]
         m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]], padding=(12, 12))
 
@@ -124,7 +150,8 @@ def _legend() -> str:
     )
 
 
-def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: dict):
+def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: dict,
+                             focus=None, focus_row=None):
     """
     Renders the map card and the region threat summary beside it.
 
@@ -135,19 +162,22 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
                      coordinates.
         region: selected region name.
         summary: output of core.summaries.summarise_region().
+        focus: core.focus.Focus when a town is searched -- the map zooms to it.
+        focus_row: the town's forecast row for the day, explained in the panel.
     """
-    section_header(
-        "Where",
-        "Risk map",
-        f"Each circle is a 0.5° {term('grid_cell')}, coloured by its predicted risk level.",
-    )
+    if focus is None:
+        subtitle = f"Each circle is a 0.5° {term('grid_cell')}, coloured by its predicted risk level."
+    else:
+        subtitle = (f"Each circle is a 0.5° {term('grid_cell')} within {focus.radius_km} km of "
+                    f"{focus.town}, coloured by its predicted risk level.")
+    section_header("Where", "Risk map", subtitle)
     with st.container(key="maprow"):
         map_col, right_col = st.columns([3, 1], gap="medium")
 
     with map_col:
         with st.container(key="card-map"):
             st_folium(
-                _build_map(predictions, region),
+                _build_map(predictions, region, focus),
                 use_container_width=True,
                 height=MAP_HEIGHT,
                 returned_objects=[],
@@ -161,13 +191,23 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
 
     with right_col:
         with st.container(key="card-threat"):
-            _render_threat_panel(summary, predictions)
+            _render_threat_panel(summary, predictions, focus, focus_row)
 
 
-def _why_block(predictions: pd.DataFrame) -> str:
-    """Plain-English reasons for the highest-risk cell's rating."""
-    row = predictions.loc[predictions["fire_probability"].idxmax()]
-    info = explain_cell(row)
+def _why_block(predictions: pd.DataFrame, focus=None, focus_row=None) -> str:
+    """Plain-English reasons for the highest-risk cell's rating -- or, in town
+    focus, for the searched town's own forecast area."""
+    if focus is not None and focus_row is not None:
+        row = focus_row
+        info = explain_cell(row)
+        level = str(row["risk_level"])
+        info["title"] = (f"Why is {focus.name} at {level} risk?" if level in ("High", "Extreme")
+                         else f"What's affecting the risk in {focus.name}?")
+        where = f"In {focus.name}'s forecast area"
+    else:
+        row = predictions.loc[predictions["fire_probability"].idxmax()]
+        info = explain_cell(row)
+        where = f"At the highest-risk cell, {describe_location(row['lat_round'], row['lon_round'])}"
     items = "".join(
         f'<div class="why-item" style="--c:{DRIVER_COLOURS[d.strength]}">'
         f"{icon(d.icon, 14)}<span>{d.text}</span></div>"
@@ -179,19 +219,20 @@ def _why_block(predictions: pd.DataFrame) -> str:
     )
     note = f'<div class="why-note">{info["note"]}</div>' if info["note"] else ""
     return (
-        f'<div class="mix-label">{info["title"]}'
-        f'<span class="place">At the highest-risk cell, '
-        f'{describe_location(row["lat_round"], row["lon_round"])}</span></div>'
+        f'<div class="mix-label">{info["title"]}<span class="place">{where}</span></div>'
         f'<div class="why-list">{items}</div>{calm}{note}'
     )
 
 
-def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = None):
-    """Right-hand summary panel, driven by the region summary."""
+def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = None,
+                         focus=None, focus_row=None):
+    """Right-hand summary panel, driven by the region (or town-area) summary."""
+    title = ("Region Threat Summary" if focus is None
+             else f'Area Summary<span class="place">Within {focus.radius_km} km of {focus.town}</span>')
     if not summary.get("has_data"):
         html(
             f"""
-            <div class="panel-title">Region Threat Summary</div>
+            <div class="panel-title">{title}</div>
             <p class="empty-note">{icon("info", 14)} No prediction data for this region yet.</p>
             """
         )
@@ -223,11 +264,11 @@ def _render_threat_panel(summary: dict, predictions: Optional[pd.DataFrame] = No
         )
 
     has_cells = predictions is not None and not predictions.empty
-    why = _why_block(predictions) if has_cells else ""
+    why = _why_block(predictions, focus, focus_row) if has_cells else ""
 
     html(
         f"""
-        <div class="panel-title">Region Threat Summary</div>
+        <div class="panel-title">{title}</div>
         <div style="margin-bottom:6px">{_pill(summary["max_risk_level"])}
           <span style="font-size:.78rem;color:{COLORS["text_muted"]};margin-left:6px">
           {summary["max_risk_level"]} risk across {summary["cell_count"]} monitored cell(s).</span></div>

@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from config import GRID_SIZE, NEAR_KM
+from core.geography import STATE_CODES, is_national
 
 EARTH_RADIUS_KM = 6371.0
 TOWNS_FILE = Path(__file__).resolve().parents[1] / "assets" / "towns.json"
@@ -81,6 +82,39 @@ def describe_location(lat: float, lon: float) -> str:
     if km < NEAR_KM:
         return f"near {name}"
     return f"{int(round(km / 5) * 5)} km {direction} of {name}"
+
+
+def towns_for_region(region: str) -> list:
+    """
+    Town names ("Kingaroy, QLD") offered by the search box for a region:
+    every town for the whole country, otherwise the towns whose *real* state
+    matches. Note this is the town's own state, not the rectangular boxes the
+    region filter uses -- Albury is listed under NSW even though its forecast
+    area falls in the Victoria box.
+    """
+    if is_national(region):
+        return list(_NAMES)
+    code = STATE_CODES.get(region)
+    return [name for name, (_, state, _, _) in zip(_NAMES, TOWNS) if state == code]
+
+
+def town_coordinates(town: str) -> tuple:
+    """(lat, lon) of a town named like "Kingaroy, QLD"."""
+    _, _, lat, lon = TOWNS[_NAMES.index(town)]
+    return lat, lon
+
+
+def distances_km(lat: float, lon: float, lats, lons) -> np.ndarray:
+    """Great-circle distance from one point to many (haversine), in km."""
+    la, la2 = np.radians(lat), np.radians(np.asarray(lats, dtype=float))
+    dlon = np.radians(np.asarray(lons, dtype=float) - lon)
+    a = np.sin((la2 - la) / 2) ** 2 + np.cos(la) * np.cos(la2) * np.sin(dlon / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
+
+
+def direction(from_lat: float, from_lon: float, to_lat: float, to_lon: float) -> str:
+    """8-point compass direction from one point to another ("SE")."""
+    return _bearing(from_lat, from_lon, to_lat, to_lon)
 
 
 def _grid(value: float, size: float = GRID_SIZE) -> float:
