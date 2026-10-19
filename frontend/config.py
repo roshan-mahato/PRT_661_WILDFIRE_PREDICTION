@@ -33,3 +33,4 @@ RADIUS_OPTIONS_KM = (25, 50, 100)   # "area around the town" choices
 DEFAULT_RADIUS_KM = 50
 NEARBY_TOWNS_MIN_KM = 100   # chart 3 looks at least this far for neighbouring towns
 FALLBACK_MAX_KM = 150       # a town with no forecast area uses the nearest one up to this far
+FOCUS_MAP_VIEW_KM = 100     # the map shows at least this far around a searched town

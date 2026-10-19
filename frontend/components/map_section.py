@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
-from config import MAP_HEIGHT
+from config import FOCUS_MAP_VIEW_KM, MAP_HEIGHT
 from core.danger import RISK_ORDER, ffdi_band
 from core.explain import explain_cell, short_reason
 from core.geography import STATE_BOUNDS, get_region_view, is_national
@@ -44,19 +44,17 @@ def _pill(level: str) -> str:
 
 
 def _focus_bounds(focus) -> list:
-    """South-west and north-east corners of the radius around the town."""
-    dlat = focus.radius_km / 111.32
-    dlon = focus.radius_km / (111.32 * max(math.cos(math.radians(focus.lat)), 0.1))
+    """South-west and north-east corners of the view around a searched town:
+    the chosen radius, but never less than FOCUS_MAP_VIEW_KM, so the heat
+    of the neighbouring areas stays visible."""
+    view_km = max(focus.radius_km, FOCUS_MAP_VIEW_KM)
+    dlat = view_km / 111.32
+    dlon = view_km / (111.32 * max(math.cos(math.radians(focus.lat)), 0.1))
     return [[focus.lat - dlat, focus.lon - dlon], [focus.lat + dlat, focus.lon + dlon]]
 
 
-def _add_focus_marks(m: folium.Map, focus) -> None:
-    """Dashed circle for the searched area and a pin on the town."""
-    folium.Circle(
-        location=[focus.lat, focus.lon], radius=focus.radius_km * 1000,
-        color=COLORS["ink"], weight=2, dash_array="6 6", fill=False,
-        tooltip=f"Within {focus.radius_km} km of {focus.town}",
-    ).add_to(m)
+def _add_town_pin(m: folium.Map, focus) -> None:
+    """A pin on the searched town, so it is easy to find on the heat map."""
     folium.Marker(
         location=[focus.lat, focus.lon], tooltip=focus.town,
         icon=folium.Icon(color="darkred", icon="map-marker", prefix="fa"),
@@ -84,7 +82,7 @@ def _build_map(predictions: pd.DataFrame, region: str, focus=None) -> folium.Map
     # frame the state's own bounding box instead.
     if focus is not None:
         m.fit_bounds(_focus_bounds(focus), padding=(12, 12))
-        _add_focus_marks(m, focus)
+        _add_town_pin(m, focus)
     elif not is_national(region) and region in STATE_BOUNDS:
         lat_min, lat_max, lon_min, lon_max = STATE_BOUNDS[region]
         m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]], padding=(12, 12))
@@ -151,7 +149,7 @@ def _legend() -> str:
 
 
 def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: dict,
-                             focus=None, focus_row=None):
+                             focus=None, focus_row=None, map_predictions=None):
     """
     Renders the map card and the region threat summary beside it.
 
@@ -162,14 +160,17 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
                      coordinates.
         region: selected region name.
         summary: output of core.summaries.summarise_region().
-        focus: core.focus.Focus when a town is searched -- the map zooms to it.
+        focus: core.focus.Focus when a town is searched -- the map centres on it.
         focus_row: the town's forecast row for the day, explained in the panel.
+        map_predictions: rows to draw on the map, if different from `predictions`
+                         (town focus draws every area, like the region view,
+                         while the panel describes only the area around the town).
     """
     if focus is None:
         subtitle = f"Each circle is a 0.5° {term('grid_cell')}, coloured by its predicted risk level."
     else:
-        subtitle = (f"Each circle is a 0.5° {term('grid_cell')} within {focus.radius_km} km of "
-                    f"{focus.town}, coloured by its predicted risk level.")
+        subtitle = (f"Each circle is a 0.5° {term('grid_cell')}, coloured by its predicted risk "
+                    f"level &middot; centred on {focus.town}.")
     section_header("Where", "Risk map", subtitle)
     with st.container(key="maprow"):
         map_col, right_col = st.columns([3, 1], gap="medium")
@@ -177,7 +178,7 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
     with map_col:
         with st.container(key="card-map"):
             st_folium(
-                _build_map(predictions, region, focus),
+                _build_map(predictions if map_predictions is None else map_predictions, region, focus),
                 use_container_width=True,
                 height=MAP_HEIGHT,
                 returned_objects=[],

@@ -122,5 +122,8 @@ else:
     render_town_hero(focus, town_row, summary, source_label)
     render_day_strip(options)
     render_insights_row(summary)
-    render_map_with_insights(day_area, region, summary, focus=focus, focus_row=town_row)
+    # The map draws every area (heat map, like the region view), centred on
+    # the town; the panel beside it summarises only the area around the town.
+    render_map_with_insights(day_area, region, summary, focus=focus, focus_row=town_row,
+                             map_predictions=_for_day(predictions, selected_day))
     render_insights_section(area, day_area, focus=focus, nearby=nearby, nearby_km=nearby_km)

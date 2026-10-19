@@ -243,3 +243,21 @@ def test_nearby_town_counts_by_its_own_distance():
     assert 80 < row["distance_km"] < 100
     assert row["risk_level"] == "Moderate"
     assert row["direction"] == "SE"
+
+
+def test_town_map_is_the_full_heat_map_centred_on_the_town(predictions):
+    """The map in town focus looks like the region view -- heat layer and a
+    circle for every area -- just centred on the town with a pin; no radius
+    circle and no cut-down set of areas."""
+    from components import map_section
+
+    tomorrow = predictions[predictions["acq_date"].dt.date == TOMORROW]
+    focus = F.make_focus(predictions, "Albury, NSW", 50)
+    html = map_section._build_map(tomorrow, "Australia (National)", focus).get_root().render()
+
+    assert html.count("L.circleMarker(") == len(tomorrow)     # every area, not just nearby
+    assert "HeatLayer" in html or "heatLayer" in html
+    assert "L.marker(" in html                                # pin on the town
+    assert "L.circle(" not in html                            # no radius circle...
+    assert '"dashArray": "' not in html                       # ...and no dashed line anywhere
+    assert "fitBounds" in html
