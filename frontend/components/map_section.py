@@ -10,11 +10,13 @@ import pandas as pd
 import streamlit as st
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
-from utils.explain import explain_cell, short_reason
+from config import MAP_HEIGHT
+from core.danger import RISK_ORDER, ffdi_band
+from core.explain import explain_cell, short_reason
+from core.geography import STATE_BOUNDS, get_region_view, is_national
+from core.places import describe_location, format_coords
 from utils.glossary import term
-from utils.places import describe_location
-from utils.regions import RISK_ORDER, STATE_BOUNDS, ffdi_band, get_region_view, is_national
-from utils.styles import format_coords, html, icon, section_header
+from utils.styles import html, icon, section_header
 from utils.theme import COLORS, SEVERITY_STYLE
 
 # Heat gradient reuses the severity palette so the map agrees with the cards.
@@ -25,7 +27,6 @@ HEAT_GRADIENT = {
     1.00: COLORS["extreme"],
 }
 
-MAP_HEIGHT = 580
 
 # Colour of a "why" item by how strongly it pushes fire danger up.
 DRIVER_COLOURS = {3: COLORS["extreme"], 2: COLORS["high"], 1: COLORS["moderate"]}
@@ -133,7 +134,7 @@ def render_map_with_insights(predictions: pd.DataFrame, region: str, summary: di
                      passing several days would stack markers on the same
                      coordinates.
         region: selected region name.
-        summary: output of utils.regions.summarise_region().
+        summary: output of core.summaries.summarise_region().
     """
     section_header(
         "Where",

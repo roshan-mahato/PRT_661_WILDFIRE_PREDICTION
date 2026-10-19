@@ -4,8 +4,8 @@ Row of four headline stat tiles for the selected region and day.
 
 import streamlit as st
 
+from core.danger import ffdi_band
 from utils.glossary import term
-from utils.regions import ffdi_band
 from utils.styles import html, icon
 from utils.theme import COLORS, SEVERITY_STYLE
 
@@ -33,7 +33,7 @@ def _tile(
 def render_insights_row(summary: dict):
     """
     Renders the four headline tiles from a region summary produced by
-    utils.regions.summarise_region().
+    core.summaries.summarise_region().
 
     When there is no data the tiles still render, saying so plainly -- an
     empty row would look like a rendering bug rather than missing data.

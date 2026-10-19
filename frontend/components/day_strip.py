@@ -12,13 +12,13 @@ from datetime import date, timedelta
 
 import streamlit as st
 
+from config import DAY_SLOTS
+from core.summaries import week_highlights
 from utils.glossary import term
-from utils.regions import week_highlights
 from utils.styles import html, icon
 from utils.theme import COLORS, SEVERITY_STYLE
 
 SESSION_KEY = "selected_forecast_day"
-SLOTS = 7  # a full forecast week; fewer days leave placeholders, not giant tiles
 
 
 def _day_label(day: date) -> str:
@@ -110,7 +110,7 @@ def render_day_strip(options: list):
     Renders the forecast day strip and returns the selected `date`.
 
     Args:
-        options: output of utils.regions.day_options(), oldest day first.
+        options: output of core.summaries.day_options(), oldest day first.
 
     Returns:
         The selected date, or None when there are no forecast days.
@@ -137,7 +137,7 @@ def render_day_strip(options: list):
             """
         )
 
-        cols = st.columns(max(SLOTS, len(options)), gap="small")
+        cols = st.columns(max(DAY_SLOTS, len(options)), gap="small")
         for index, col in enumerate(cols):
             with col:
                 if index < len(options):

@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 from components import day_strip, insights, map_section
 from conftest import TODAY, TOMORROW
-from utils.regions import day_options, summarise_region
+from core.summaries import day_options, summarise_region
 
 
 @pytest.fixture
@@ -118,7 +118,7 @@ def test_marker_radius_grows_with_probability():
 # ----------------------------------------------------------------------------
 from components import hero  # noqa: E402
 from utils import styles  # noqa: E402
-from utils.places import describe_location  # noqa: E402
+from core.places import describe_location, format_coords  # noqa: E402
 
 
 def test_hero_headline_and_facts(markdown, predictions):
@@ -161,7 +161,7 @@ def test_hero_links_the_right_fire_authority(markdown, predictions, region, auth
 
 def test_every_state_has_a_fire_authority():
     from components.headers import REGIONS
-    from utils.regions import is_national
+    from core.geography import is_national
 
     for region in REGIONS:
         if not is_national(region):
@@ -196,7 +196,7 @@ def test_html_helper_keeps_words_apart_and_removes_indentation(markdown):
     [(-33.5, 151.0, "33.5°S, 151.0°E"), (1.0, -2.25, "1.0°N, 2.2°W")],
 )
 def test_format_coords(lat, lon, text):
-    assert styles.format_coords(lat, lon) == text
+    assert format_coords(lat, lon) == text
 
 
 def test_map_frames_selected_state(predictions):
@@ -204,3 +204,26 @@ def test_map_frames_selected_state(predictions):
     rendered = m.get_root().render()
     assert "fitBounds" in rendered
     assert "fitBounds" not in map_section._build_map(predictions, "Australia (National)").get_root().render()
+
+
+def test_stylesheet_survives_the_html_sanitiser():
+    """Regression: a '<' anywhere in style.css (even '<key>' in a comment)
+    makes the browser's DOMPurify drop the whole <style> element, leaving the
+    dashboard unstyled. The server-side snapshot can't see that, so guard it here."""
+    import re
+
+    css = styles.STYLESHEET.read_text(encoding="utf-8")
+    assert not re.search(r"<[/\w!]", css), "style.css must not contain '<'"
+    page_css = styles.global_css()
+    body = page_css[len("<style>"):-len("</style>")]
+    assert "<" not in body
+
+
+def test_theme_variables_cover_every_colour_used_in_css():
+    """Every var(--c-...) in style.css must be defined by the theme."""
+    import re
+
+    css = styles.STYLESHEET.read_text(encoding="utf-8")
+    defined = set(re.findall(r"(--[a-z0-9-]+):", styles.theme_variables()))
+    used = set(re.findall(r"var\((--(?:c|font)-[a-z0-9-]+)\)", css))
+    assert used <= defined, used - defined

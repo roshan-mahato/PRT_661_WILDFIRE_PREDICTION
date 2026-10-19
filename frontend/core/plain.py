@@ -2,14 +2,15 @@
 Everyday-language versions of the dashboard's numbers.
 
 The model works in 0.5-degree grid cells; people think in shares ("1 in 8"),
-land area ("larger than Victoria") and named fire-danger bands. These helpers
-translate.
+land area ("larger than Victoria") and plain weather words. These helpers
+translate. (Named fire-danger bands live in core.danger.)
 """
 
 import math
 
+from config import GRID_SIZE
+
 KM_PER_DEGREE = 111.32
-GRID_SIZE = 0.5
 
 # Land area of each state and territory, km^2 (Geoscience Australia, rounded).
 STATE_AREAS_KM2 = [
@@ -21,17 +22,6 @@ STATE_AREAS_KM2 = [
     ("Victoria", 227_444),
     ("Tasmania", 68_401),
     ("the ACT", 2_358),
-]
-
-# McArthur FFDI bands (lower bound, name) -- same boundaries as
-# utils.regions.ffdi_band(), with an en dash for display.
-FFDI_BANDS = [
-    (0, "Low–Moderate"),
-    (12, "High"),
-    (25, "Very High"),
-    (50, "Severe"),
-    (75, "Extreme"),
-    (100, "Catastrophic"),
 ]
 
 
@@ -77,16 +67,8 @@ def area_comparison(km2: float) -> str:
     return ""
 
 
-def ffdi_band_name(ffdi: float) -> str:
-    name = FFDI_BANDS[0][1]
-    for lower, band in FFDI_BANDS:
-        if ffdi >= lower:
-            name = band
-    return name
-
-
 def weather_words(row) -> str:
-    """'hot (31°C), very dry air (14%), wind 25 km/h' for a prediction row."""
+    """'hot (31°C), very dry air (14%), fresh wind (25 km/h)' for a prediction row."""
     t, rh, w = row["temperature_2m"], row["relative_humidity_2m"], row["wind_speed_10m"]
     heat = "very hot" if t >= 30 else "hot" if t >= 25 else "warm" if t >= 21 else "mild" if t >= 15 else "cool"
     air = ("very dry air" if rh <= 20 else "dry air" if rh <= 30 else "fairly dry air" if rh <= 40

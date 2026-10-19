@@ -17,7 +17,7 @@ afternoon peak), so the thresholds below are set for daily averages -- a
 
 from typing import NamedTuple
 
-from utils.regions import ffdi_band
+from core.danger import ffdi_band
 
 
 class Driver(NamedTuple):

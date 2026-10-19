@@ -7,9 +7,10 @@ live.
 import pandas as pd
 
 from utils.glossary import term
-from utils.places import describe_location
-from utils.regions import RISK_ORDER, ffdi_band, is_national
-from utils.styles import format_coords, html, icon
+from core.danger import RISK_ORDER, ffdi_band
+from core.geography import is_national
+from core.places import describe_location, format_coords
+from utils.styles import html, icon
 from utils.theme import COLORS
 
 # Lighter tints of the severity colours: the banner is dark, and the regular
@@ -74,7 +75,7 @@ def _scale(level: str) -> str:
 def render_hero(summary: dict, region: str, source_label: str) -> None:
     """
     Args:
-        summary: output of utils.regions.summarise_region() for the selected day.
+        summary: output of core.summaries.summarise_region() for the selected day.
         region: selected region name.
         source_label: where the numbers came from ("from the last saved prediction run").
     """

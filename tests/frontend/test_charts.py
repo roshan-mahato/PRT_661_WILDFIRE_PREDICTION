@@ -10,16 +10,17 @@ import pandas as pd
 import pytest
 from components import charts
 from conftest import TODAY, TOMORROW
-from utils.places import describe_location, towns_at_risk
-from utils.plain import (
+from core import chart_data
+from core.danger import ffdi_band_name
+from core.hotspots import persistent_hotspots
+from core.places import describe_location, towns_at_risk
+from core.plain import (
     area_comparison,
     cell_area_km2,
-    ffdi_band_name,
     format_area,
     one_in,
     weather_words,
 )
-from utils.regions import persistent_hotspots
 
 
 @pytest.fixture
@@ -149,7 +150,7 @@ def test_risk_shares_are_area_weighted():
         {"lat_round": -10.0, "lon_round": 130.0, "acq_date": TODAY, "risk_level": "Extreme", "fire_probability": 0.9},
         {"lat_round": -43.0, "lon_round": 146.0, "acq_date": TODAY, "risk_level": "Low", "fire_probability": 0.1},
     ])
-    shares, area, counts = charts.daily_risk_shares(df)
+    shares, area, counts = chart_data.daily_risk_shares(df)
     assert shares.loc[pd.Timestamp(TODAY), "Extreme"] > 0.5
     assert shares.sum(axis=1).iloc[0] == pytest.approx(1.0)
     assert list(counts.iloc[0]) == [1, 0, 0, 1]
@@ -171,7 +172,7 @@ def test_outlook_stacks_percent_of_region(st_calls, predictions):
 def test_outlook_labels_share_and_one_in_n(st_calls, predictions):
     charts.render_risk_outlook(predictions)
 
-    shares, _, _ = charts.daily_risk_shares(predictions)
+    shares, _, _ = chart_data.daily_risk_shares(predictions)
     elevated = shares["High"] + shares["Extreme"]
     (labels,) = [t for t in st_calls["figures"][0].data if t.type == "scatter"]
     assert list(labels.text) == [f"<b>{s:.0%}</b><br>{one_in(s)}" for s in elevated]
@@ -182,7 +183,7 @@ def test_outlook_hover_gives_area_comparison_and_count(st_calls, predictions):
 
     extreme = st_calls["figures"][0].data[0]
     area_text, comparison, count = extreme.customdata[1]  # tomorrow
-    _, area, _ = charts.daily_risk_shares(predictions)
+    _, area, _ = chart_data.daily_risk_shares(predictions)
     tomorrow_extreme = area["Extreme"].iloc[1]
     assert area_text == format_area(tomorrow_extreme)
     assert comparison == f" · {area_comparison(tomorrow_extreme)}"
@@ -231,8 +232,8 @@ def test_places_side_list_names_the_riskiest_towns(st_calls, predictions):
 
 def test_places_names_preview_truncates():
     names = [f"Town{i}, NSW" for i in range(9)]
-    assert charts._names_preview(names) == "Town0, Town1, Town2, Town3, Town4, Town5 and 3 more"
-    assert charts._names_preview([]) == "none"
+    assert chart_data.names_preview(names) == "Town0, Town1, Town2, Town3, Town4, Town5 and 3 more"
+    assert chart_data.names_preview([]) == "none"
 
 
 def test_places_no_towns(st_calls, predictions):

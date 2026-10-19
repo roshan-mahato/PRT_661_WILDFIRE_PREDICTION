@@ -1,19 +1,7 @@
 import streamlit as st
 
-from utils.regions import NATIONAL
+from core.geography import REGIONS
 from utils.styles import html, icon
-
-REGIONS = [
-    NATIONAL,
-    "New South Wales",
-    "Victoria",
-    "Queensland",
-    "Western Australia",
-    "South Australia",
-    "Tasmania",
-    "Northern Territory",
-    "Australian Capital Territory",
-]
 
 SOURCES = ["Saved", "Live"]
 
