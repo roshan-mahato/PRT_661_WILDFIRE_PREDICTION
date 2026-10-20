@@ -1,0 +1,7 @@
+model,description,features,roc_auc,pr_auc,brier,threshold,precision,recall,f1,precision_top_5pct,sanity_pass,sanity_median_spread,train_minutes
+ffdi_only,Logistic regression on peak-hour FFDI only,1,0.531,0.0874,0.0753,0.0742,0.0871,0.8901,0.1586,0.1258,0/15,0.066,0.1
+logistic,"Logistic regression, all features",27,0.7824,0.2399,0.0685,0.1788,0.2297,0.5631,0.3263,0.325,0/15,0.0112,0.2
+random_forest,"Random forest, all features",27,0.881,0.4382,0.0576,0.2063,0.3572,0.6439,0.4595,0.5256,0/15,0.2575,0.7
+lgbm,LightGBM (deployed configuration),27,0.9021,0.4851,0.0546,0.2232,0.4094,0.629,0.496,0.5651,0/15,0.2932,0.2
+lgbm_no_coords,LightGBM without latitude/longitude,25,0.8237,0.3077,0.0652,0.1752,0.2502,0.6315,0.3584,0.3973,5/15,0.032,0.3
+lgbm_monotone,LightGBM with monotone fire-weather constraints,27,0.9006,0.4774,0.055,0.2199,0.4065,0.629,0.4939,0.5584,15/15,0.4568,0.2

@@ -1,0 +1,91 @@
+model,place,month,p_very_high,p_high,p_moderate,p_low,p_wet,monotonic,spread
+ffdi_only,"Blue Mountains, NSW",Jan,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,"Blue Mountains, NSW",May,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,"Blue Mountains, NSW",Sep,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,Central Victoria,Jan,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,Central Victoria,May,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,Central Victoria,Sep,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,South-west WA,Jan,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,South-west WA,May,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,South-west WA,Sep,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,SE Queensland,Jan,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,SE Queensland,May,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,SE Queensland,Sep,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,"Top End, NT",Jan,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,"Top End, NT",May,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+ffdi_only,"Top End, NT",Sep,0.0135,0.0299,0.0675,0.0795,0.0795,False,0.066
+logistic,"Blue Mountains, NSW",Jan,0.0104,0.0086,0.0104,0.014,0.0029,False,0.0112
+logistic,"Blue Mountains, NSW",May,0.0179,0.014,0.0161,0.0335,0.0104,False,0.0231
+logistic,"Blue Mountains, NSW",Sep,0.0161,0.014,0.0148,0.0221,0.0104,False,0.0117
+logistic,Central Victoria,Jan,0.0089,0.0085,0.0089,0.0104,0.0022,False,0.0082
+logistic,Central Victoria,May,0.0148,0.0122,0.014,0.0221,0.0104,False,0.0117
+logistic,Central Victoria,Sep,0.014,0.0104,0.014,0.0183,0.0092,False,0.0091
+logistic,South-west WA,Jan,0.0029,0.0022,0.0025,0.0089,0.0008,False,0.008
+logistic,South-west WA,May,0.0104,0.0092,0.0104,0.0148,0.0085,False,0.0063
+logistic,South-west WA,Sep,0.0104,0.0086,0.0104,0.014,0.0029,False,0.0112
+logistic,SE Queensland,Jan,0.0104,0.0092,0.0104,0.014,0.0085,False,0.0055
+logistic,SE Queensland,May,0.0221,0.0161,0.0221,0.0465,0.014,False,0.0325
+logistic,SE Queensland,Sep,0.0183,0.014,0.0179,0.0354,0.0122,False,0.0232
+logistic,"Top End, NT",Jan,0.0104,0.0089,0.0104,0.014,0.0085,False,0.0055
+logistic,"Top End, NT",May,0.0221,0.0161,0.0207,0.0414,0.014,False,0.0274
+logistic,"Top End, NT",Sep,0.0179,0.014,0.0174,0.0335,0.0104,False,0.0231
+random_forest,"Blue Mountains, NSW",Jan,0.0317,0.0388,0.1861,0.1861,0.0197,False,0.1664
+random_forest,"Blue Mountains, NSW",May,0.0509,0.0583,0.3189,0.2268,0.027,False,0.2919
+random_forest,"Blue Mountains, NSW",Sep,0.0633,0.0751,0.3109,0.2534,0.0247,False,0.2862
+random_forest,Central Victoria,Jan,0.018,0.018,0.113,0.1493,0.0509,False,0.1312
+random_forest,Central Victoria,May,0.0247,0.0247,0.2534,0.3189,0.1129,False,0.2942
+random_forest,Central Victoria,Sep,0.0247,0.0197,0.0953,0.1511,0.0388,False,0.1314
+random_forest,South-west WA,Jan,0.0145,0.0145,0.0874,0.1993,0.0874,False,0.1848
+random_forest,South-west WA,May,0.0197,0.0197,0.1583,0.2268,0.099,False,0.2071
+random_forest,South-west WA,Sep,0.0197,0.018,0.0874,0.1471,0.0751,False,0.129
+random_forest,SE Queensland,Jan,0.0509,0.0787,0.2587,0.2592,0.027,False,0.2322
+random_forest,SE Queensland,May,0.0518,0.0718,0.2845,0.2845,0.027,False,0.2575
+random_forest,SE Queensland,Sep,0.0817,0.1129,0.4069,0.365,0.0317,False,0.3751
+random_forest,"Top End, NT",Jan,0.3498,0.358,0.3394,0.1275,0.0107,False,0.3473
+random_forest,"Top End, NT",May,0.3903,0.4276,0.3903,0.1567,0.0121,False,0.4156
+random_forest,"Top End, NT",Sep,0.3498,0.358,0.358,0.1861,0.0247,False,0.3334
+lgbm,"Blue Mountains, NSW",Jan,0.0332,0.0527,0.0573,0.0307,0.0072,False,0.05
+lgbm,"Blue Mountains, NSW",May,0.0527,0.0917,0.2429,0.1086,0.013,False,0.2298
+lgbm,"Blue Mountains, NSW",Sep,0.0527,0.0975,0.1861,0.0975,0.0082,False,0.1779
+lgbm,Central Victoria,Jan,0.029,0.0253,0.0527,0.0253,0.0082,False,0.0445
+lgbm,Central Victoria,May,0.1168,0.1086,0.517,0.2813,0.0432,False,0.4737
+lgbm,Central Victoria,Sep,0.0489,0.0489,0.1586,0.1277,0.0189,False,0.1398
+lgbm,South-west WA,Jan,0.039,0.0527,0.0573,0.0432,0.0152,False,0.0421
+lgbm,South-west WA,May,0.1617,0.2425,0.5583,0.517,0.2123,False,0.3966
+lgbm,South-west WA,Sep,0.1586,0.2429,0.3907,0.2248,0.0975,False,0.2932
+lgbm,SE Queensland,Jan,0.0975,0.1617,0.2813,0.1277,0.0082,False,0.2731
+lgbm,SE Queensland,May,0.0964,0.1586,0.3545,0.1586,0.0087,False,0.3458
+lgbm,SE Queensland,Sep,0.2813,0.5029,0.7532,0.3885,0.013,False,0.7402
+lgbm,"Top End, NT",Jan,0.2232,0.3907,0.3545,0.029,0.0036,False,0.3871
+lgbm,"Top End, NT",May,0.4267,0.6076,0.7981,0.0573,0.0072,False,0.7908
+lgbm,"Top End, NT",Sep,0.2696,0.3545,0.3273,0.1024,0.0185,False,0.336
+lgbm_no_coords,"Blue Mountains, NSW",Jan,0.0445,0.0377,0.0124,0.0157,0.0124,False,0.032
+lgbm_no_coords,"Blue Mountains, NSW",May,0.0274,0.0377,0.0274,0.0445,0.0334,False,0.017
+lgbm_no_coords,"Blue Mountains, NSW",Sep,0.061,0.061,0.0532,0.0492,0.0187,True,0.0423
+lgbm_no_coords,Central Victoria,Jan,0.0445,0.0377,0.0124,0.0157,0.0124,False,0.032
+lgbm_no_coords,Central Victoria,May,0.0274,0.0377,0.0274,0.0445,0.0334,False,0.017
+lgbm_no_coords,Central Victoria,Sep,0.061,0.061,0.0532,0.0492,0.0187,True,0.0423
+lgbm_no_coords,South-west WA,Jan,0.0445,0.0377,0.0124,0.0157,0.0124,False,0.032
+lgbm_no_coords,South-west WA,May,0.0274,0.0377,0.0274,0.0445,0.0334,False,0.017
+lgbm_no_coords,South-west WA,Sep,0.061,0.061,0.0532,0.0492,0.0187,True,0.0423
+lgbm_no_coords,SE Queensland,Jan,0.0445,0.0377,0.0124,0.0157,0.0124,False,0.032
+lgbm_no_coords,SE Queensland,May,0.0274,0.0377,0.0274,0.0445,0.0334,False,0.017
+lgbm_no_coords,SE Queensland,Sep,0.061,0.061,0.0532,0.0492,0.0187,True,0.0423
+lgbm_no_coords,"Top End, NT",Jan,0.0445,0.0377,0.0124,0.0157,0.0124,False,0.032
+lgbm_no_coords,"Top End, NT",May,0.0274,0.0377,0.0274,0.0445,0.0334,False,0.017
+lgbm_no_coords,"Top End, NT",Sep,0.061,0.061,0.0532,0.0492,0.0187,True,0.0423
+lgbm_monotone,"Blue Mountains, NSW",Jan,0.0689,0.0689,0.0689,0.0347,0.0032,True,0.0657
+lgbm_monotone,"Blue Mountains, NSW",May,0.3137,0.3137,0.3137,0.1254,0.0087,True,0.3049
+lgbm_monotone,"Blue Mountains, NSW",Sep,0.2552,0.2552,0.2552,0.1254,0.0078,True,0.2474
+lgbm_monotone,Central Victoria,Jan,0.0689,0.0487,0.0418,0.0269,0.0061,True,0.0628
+lgbm_monotone,Central Victoria,May,0.6569,0.5893,0.5893,0.3137,0.0269,True,0.63
+lgbm_monotone,Central Victoria,Sep,0.3258,0.2552,0.2552,0.1254,0.0127,True,0.3132
+lgbm_monotone,South-west WA,Jan,0.1484,0.1254,0.1026,0.0821,0.0197,True,0.1287
+lgbm_monotone,South-west WA,May,0.6809,0.6569,0.5964,0.4409,0.1091,True,0.5719
+lgbm_monotone,South-west WA,Sep,0.5986,0.5893,0.5212,0.2788,0.0689,True,0.5297
+lgbm_monotone,SE Queensland,Jan,0.4221,0.4221,0.3303,0.1254,0.0061,True,0.416
+lgbm_monotone,SE Queensland,May,0.4645,0.4645,0.3798,0.1438,0.0078,True,0.4568
+lgbm_monotone,SE Queensland,Sep,0.8605,0.8605,0.8605,0.4409,0.0127,True,0.8479
+lgbm_monotone,"Top End, NT",Jan,0.7366,0.6809,0.4409,0.0551,0.0008,True,0.7358
+lgbm_monotone,"Top End, NT",May,1.0,0.9296,0.7263,0.0895,0.0012,True,0.9988
+lgbm_monotone,"Top End, NT",Sep,0.6809,0.4867,0.2651,0.0689,0.0037,True,0.6773

@@ -1,0 +1,13 @@
+split,season,days,rows,fires,fire_rate
+train,Summer (Dec-Feb),150,429150,19366,0.0451
+train,Autumn (Mar-May),184,526424,38142,0.0725
+train,Winter (Jun-Aug),177,506397,38628,0.0763
+train,Spring (Sep-Nov),91,260351,23563,0.0905
+val,Summer (Dec-Feb),90,257490,10630,0.0413
+val,Autumn (Mar-May),13,37193,832,0.0224
+val,Winter (Jun-Aug),7,20027,2052,0.1025
+val,Spring (Sep-Nov),91,260351,24841,0.0954
+test,Summer (Dec-Feb),0,0,0,
+test,Autumn (Mar-May),79,226019,16647,0.0737
+test,Winter (Jun-Aug),92,263212,22911,0.087
+test,Spring (Sep-Nov),29,82969,7470,0.09
