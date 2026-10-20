@@ -149,6 +149,16 @@ def filter_by_region(df: pd.DataFrame, region: str) -> pd.DataFrame:
     return df[assigned == region].reset_index(drop=True)
 
 
+def region_bbox(region: str) -> Optional[tuple]:
+    """
+    (lat_min, lat_max, lon_min, lon_max) to fetch for a region, or None for
+    the whole country. Uses the same rectangles as the state assignment.
+    """
+    if is_national(region):
+        return None
+    return STATE_BOUNDS.get(region)
+
+
 def get_region_view(region: str) -> tuple:
     """Returns ([lat, lon], zoom) for the map."""
     if is_national(region):

@@ -8,6 +8,9 @@ first, then run this:
     uv run streamlit run frontend/main.py
 """
 
+import time
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 from components.charts import render_insights_section
@@ -17,15 +20,15 @@ from components.hero import render_hero, render_town_hero
 from components.insights import render_insights_row
 from components.map_section import render_map_with_insights
 from components.town_search import render_town_search
-from config import NEARBY_TOWNS_MIN_KM
+from config import LIVE_MAX_AGE, NEARBY_TOWNS_MIN_KM
 from core.focus import cells_within, make_focus, nearby_towns, town_day_options, town_rows
 from utils.api_client import (
     check_api_health,
-    fetch_live_predictions,
+    fetch_live_weather,
     fetch_stored_predictions,
     refresh_predictions,
 )
-from core.geography import filter_by_region
+from core.geography import filter_by_region, region_bbox
 from core.summaries import day_options, summarise_region
 from utils.styles import inject_global_css
 
@@ -44,23 +47,53 @@ search = render_town_search(region)   # (town, radius_km) or None
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
-if controls["refresh"]:
-    with st.spinner("Recomputing predictions from the latest weather data..."):
+def run_live_fetch(region: str) -> None:
+    """Downloads the latest forecast for the region and predicts it."""
+    # Remember the attempt even if it fails, so a server that is down is not
+    # asked again on every click -- Refresh retries straight away.
+    st.session_state.setdefault("live_tried", {})[region] = time.time()
+    with st.spinner(f"Fetching the latest weather for {region} and predicting..."):
+        summary, error = fetch_live_weather(region_bbox(region))
+    if error:
+        st.error(error)
+        return
+    st.session_state.setdefault("live_fetched", {})[region] = time.time()
+    message = (
+        f"Fetched the latest forecast for {summary['cells_saved']:,} grid cells and "
+        f"saved {summary['predictions_written']:,} predictions in {summary['seconds']:.0f}s."
+    )
+    if summary["cells_failed"]:
+        st.warning(f"{message} {summary['cells_failed']:,} cells could not be fetched "
+                   "and keep their previous predictions.")
+    else:
+        st.success(message)
+
+
+if controls["use_live"]:
+    # Fetch when asked to, or when this region has no recent live fetch.
+    # Streamlit reruns the script on every click, so without the age check
+    # each click on the day strip would download the weather again.
+    last = st.session_state.get("live_tried", {}).get(region)
+    if controls["refresh"] or last is None or time.time() - last > LIVE_MAX_AGE:
+        run_live_fetch(region)
+elif controls["refresh"]:
+    with st.spinner("Re-running the model on the stored forecast..."):
         _, refresh_error = refresh_predictions()
     if refresh_error:
         st.error(refresh_error)
     else:
-        st.success("Predictions refreshed and saved.")
+        st.success("Predictions recomputed and saved.")
 
 healthy, health_message = check_api_health()
 if not healthy:
     st.warning(f"Prediction API unavailable — {health_message}")
 
-if controls["use_live"]:
-    predictions, load_error = fetch_live_predictions()
-    source_label = "computed live from current weather"
+# Both modes read the stored predictions; Live has just written new ones.
+predictions, load_error = fetch_stored_predictions(latest_only=True)
+fetched_at = st.session_state.get("live_fetched", {}).get(region)
+if controls["use_live"] and fetched_at:
+    source_label = f"fetched live at {datetime.fromtimestamp(fetched_at):%H:%M}"
 else:
-    predictions, load_error = fetch_stored_predictions(latest_only=True)
     source_label = "from the last saved prediction run"
 
 if load_error:

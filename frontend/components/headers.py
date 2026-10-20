@@ -44,7 +44,8 @@ def render_header():
                 width="stretch",
                 help=(
                     "Saved reads stored predictions — fast, and works if the weather "
-                    "API is down. Live recomputes from current weather data."
+                    "server is down. Live downloads the latest forecast for the "
+                    "selected region and predicts it."
                 ),
             )
 
@@ -53,7 +54,10 @@ def render_header():
                 "Refresh",
                 icon=":material/refresh:",
                 width="stretch",
-                help="Recompute predictions from the latest weather and save them.",
+                help=(
+                    "Live: download the latest forecast again and predict it. "
+                    "Saved: re-run the model on the stored forecast."
+                ),
             )
 
     return {"region": region, "use_live": source == "Live", "refresh": refresh}

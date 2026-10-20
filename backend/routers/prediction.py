@@ -8,6 +8,8 @@ predictions are made once per forecast run by Scripts/fetch_weather_live.py
 (or POST /predictions/refresh).
 """
 
+import math
+import threading
 from datetime import date as date_type, datetime, timezone
 
 import numpy as np
@@ -20,7 +22,7 @@ from backend.api.fire_prediction import (
 )
 from backend.api.weather import latest_forecast_run
 from Scripts.prediction_engine import OUTPUT_COLS
-from backend.schemas.prediction import FireRiskResponse
+from backend.schemas.prediction import FireRiskResponse, LiveFetchResponse
 
 router = APIRouter(prefix="/predictions", tags=["predictions"])
 
@@ -29,6 +31,10 @@ AUS_LAT_MIN, AUS_LAT_MAX = -44.0, -10.0
 AUS_LON_MIN, AUS_LON_MAX = 112.0, 154.0
 
 MAX_HOURS_BACK = 720  # 30 days
+
+# One live fetch at a time: SQLite has a single writer, and two overlapping
+# fetches of the same cells would only waste API calls.
+_live_fetch_lock = threading.Lock()
 
 # Kept so existing clients can still send it; predictions now come from the
 # latest forecast run, so it no longer changes the result.
@@ -176,3 +182,51 @@ def read_live_fire_risk_by_location(
         start_date=_today_utc(), latitude=latitude, longitude=longitude
     )
     return _to_response(df, hours_back)
+
+
+@router.post(
+    "/live",
+    response_model=LiveFetchResponse,
+    summary="Fetch the latest forecast for an area and predict it",
+)
+def fetch_live_fire_risk(
+    lat_min: float = Query(AUS_LAT_MIN, ge=AUS_LAT_MIN, le=AUS_LAT_MAX),
+    lat_max: float = Query(AUS_LAT_MAX, ge=AUS_LAT_MIN, le=AUS_LAT_MAX),
+    lon_min: float = Query(AUS_LON_MIN, ge=AUS_LON_MIN, le=AUS_LON_MAX),
+    lon_max: float = Query(AUS_LON_MAX, ge=AUS_LON_MIN, le=AUS_LON_MAX),
+) -> LiveFetchResponse:
+    """
+    Fetches the Open-Meteo forecast for the land cells inside the box, stores
+    it as a new forecast run, and predicts it -- the same steps as
+    Scripts/fetch_weather_live.py, limited to one area so the dashboard's
+    Live button returns in seconds rather than minutes. Leave the box at its
+    defaults for the whole country.
+
+    The archive history is not topped up here (that is the daily job's work);
+    the forecast window still covers the days since the history ends, so the
+    drought index continues correctly.
+
+    Afterwards GET /predictions and /predictions/stored return the new values.
+    """
+    if lat_min > lat_max or lon_min > lon_max:
+        raise HTTPException(status_code=422, detail="Box minimums must not exceed maximums.")
+    # Widen the box to whole 0.5-degree cells, so a cell is never cut off
+    # because a state border falls inside it.
+    bbox = (math.floor(lat_min * 2) / 2, math.ceil(lat_max * 2) / 2,
+            math.floor(lon_min * 2) / 2, math.ceil(lon_max * 2) / 2)
+
+    if not _live_fetch_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A live fetch is already running -- try again shortly.")
+    try:
+        # Imported here: it pulls in the Open-Meteo client, which the
+        # read-only endpoints do not need.
+        from Scripts.fetch_weather_live import LiveFetchError, fetch_and_predict
+        try:
+            summary = fetch_and_predict(bbox, update_history=False)
+        except LiveFetchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=f"Model file not available: {exc}") from exc
+    finally:
+        _live_fetch_lock.release()
+    return LiveFetchResponse(**summary)

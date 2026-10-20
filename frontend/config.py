@@ -13,6 +13,11 @@ import os
 API_BASE_URL = os.getenv("WILDFIRE_API_URL", "http://127.0.0.1:8000")
 REQUEST_TIMEOUT = 30  # seconds for ordinary API reads
 REFRESH_TIMEOUT = int(os.getenv("WILDFIRE_REFRESH_TIMEOUT", "180"))  # a full refresh is slow
+# Live fetch: weather download + predict. One state takes seconds; the whole
+# country takes minutes (longer on the public API, which is paced).
+LIVE_FETCH_TIMEOUT = int(os.getenv("WILDFIRE_LIVE_TIMEOUT", "900"))
+# In Live mode a region is fetched again only if its last fetch is older than this.
+LIVE_MAX_AGE = 600  # seconds
 
 # How long fetched data is reused before asking the API again (seconds).
 PREDICTIONS_CACHE_TTL = 300  # predictions only change when a refresh or fetch runs

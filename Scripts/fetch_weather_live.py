@@ -209,40 +209,51 @@ def run_pass(client, limiter, args, batches: list, results: list, tot: dict, t0:
 # ==============================================================================
 # Main
 # ==============================================================================
+class LiveFetchError(RuntimeError):
+    """The live fetch could not run (server down, quota used up, ...)."""
+
+
 def check_server_reachable(url: str):
     """Fail fast if the self-hosted server is down, instead of retrying every batch."""
     if hist.is_public(url):
         return
     try:
         requests.get(url, timeout=5)   # any response, even a 400, means it is up
-    except requests.exceptions.ConnectionError:
-        sys.exit(f"Cannot reach the self-hosted Open-Meteo server at {url}.\n"
-                 "From the repo root run:  docker compose up -d\n"
-                 "or set OPENMETEO_FORECAST_URL=https://api.open-meteo.com/v1/forecast")
+    except requests.exceptions.ConnectionError as exc:
+        raise LiveFetchError(
+            f"Cannot reach the self-hosted Open-Meteo server at {url}.\n"
+            "From the repo root run:  docker compose up -d\n"
+            "or set OPENMETEO_FORECAST_URL=https://api.open-meteo.com/v1/forecast"
+        ) from exc
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0],
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--forecast-url", default=FORECAST_URL)
-    parser.add_argument("--archive-url", default=ARCHIVE_URL,
-                        help="Archive API for the history update and the land mask")
-    parser.add_argument("--no-history-update", dest="update_history", action="store_false",
-                        help="Do not bring the archive history up to yesterday first")
-    parser.add_argument("--days", type=int, default=FORECAST_DAYS, help="Forecast days incl. today")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Cells per request")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Parallel requests (default 4 self-hosted, 2 public)")
-    parser.add_argument("--bbox", type=float, nargs=4, metavar=("LAT_MIN", "LAT_MAX", "LON_MIN", "LON_MAX"),
-                        help="Only this part of the grid (test run)")
-    parser.add_argument("--limit", type=int, default=None, help="Only this many land cells (test run)")
-    parser.add_argument("--no-db", dest="save_db", action="store_false",
-                        help="Fetch and report only; write nothing to wildfire_db.db")
-    parser.add_argument("--no-predict", dest="predict", action="store_false",
-                        help="Store the weather but do not build features or predict")
-    args = parser.parse_args()
-    public = hist.is_public(args.forecast_url)
-    args.workers = args.workers or (2 if public else 4)
+def fetch_and_predict(bbox: tuple | None = None, *, forecast_url: str = FORECAST_URL,
+                      archive_url: str = ARCHIVE_URL, update_history: bool = True,
+                      days: int = FORECAST_DAYS, batch_size: int = BATCH_SIZE,
+                      workers: int | None = None, limit: int | None = None,
+                      save_db: bool = True, predict: bool = True) -> dict:
+    """
+    Fetches the forecast for the land cells in `bbox` (lat_min, lat_max,
+    lon_min, lon_max; None = whole grid), stores it as one forecast run and,
+    with `predict`, builds the features and predictions for it.
+
+    Used by the command line (main) and by POST /predictions/live, so the
+    dashboard's Live button runs the same steps as the daily job. The Live
+    button passes update_history=False: the history top-up is the daily job's
+    work, and the forecast window still covers any days since the history ends.
+
+    Raises LiveFetchError if the fetch cannot start. Returns a summary dict:
+    run_id, status, cells_requested, cells_saved, cells_failed,
+    weather_rows, feature_rows, predictions_written, seconds.
+    """
+    t_start = time.time()
+    public = hist.is_public(forecast_url)
+    args = types.SimpleNamespace(
+        forecast_url=forecast_url, archive_url=archive_url, update_history=update_history,
+        days=days, batch_size=batch_size, workers=workers or (2 if public else 4),
+        bbox=list(bbox) if bbox else None, limit=limit, save_db=save_db, predict=predict,
+        run_id=None,
+    )
 
     if args.save_db:
         from backend.db_init import create_tables
@@ -257,10 +268,13 @@ def main():
     probe_args = types.SimpleNamespace(start=hist.DEFAULT_START, archive_url=args.archive_url)
     try:
         mask = hist.build_land_mask(client, limiter, probe_args, grid)
-    except hist.DailyLimitReached:
-        sys.exit("Daily API limit reached while probing the land mask. Run again later.")
+    except hist.DailyLimitReached as exc:
+        raise LiveFetchError("Daily API limit reached while probing the land mask. "
+                             "Run again later.") from exc
     land = [c for c in grid if mask.get(c) is not False]   # unknown cells are fetched
     todo = land[: args.limit] if args.limit else land
+    if not todo:
+        raise LiveFetchError("No land cells in the requested area.")
     if args.save_db:
         seed_grid_cells({c: mask[c] for c in grid if c in mask})
         if args.update_history:
@@ -270,7 +284,12 @@ def main():
                 workers=hist.DEFAULT_WORKERS, run_id=None)
             # Cells it cannot bring up to date are still forecast; the
             # forecast window below covers their missing days.
-            hist.update_archive(client, limiter, hist_args, todo)
+            try:
+                hist.update_archive(client, limiter, hist_args, todo)
+            except SystemExit:
+                # update_archive exits on the daily limit; it has already
+                # kept what it saved. Carry on with the forecast.
+                print("History update stopped early -- continuing with the forecast.")
 
     args.start, args.end = forecast_window(args.days, todo, args.save_db)
     weight = hist.request_weight(len(todo), args.start, args.end, len(LIVE_VARS))
@@ -303,11 +322,11 @@ def main():
             batches = run_pass(client, limiter, args, batches, results, tot, t0)
             if not batches or tot["stop"]:
                 break
-    except KeyboardInterrupt:
+    except BaseException:
+        # Ctrl+C or anything unexpected: never leave the run looking unfinished.
         if args.save_db:
             finish_run(args.run_id, "failed")
-        print("\nStopped. The run is marked failed; the current predictions are unchanged.")
-        sys.exit(1)
+        raise
 
     failed_cells = {c for b in batches for c in b} | set(tot["short"])
     n_days = sum(len(r) for r in results)
@@ -319,17 +338,58 @@ def main():
         print(f"{len(failed_cells):,} cell(s) NOT refreshed -- their previous predictions stay "
               f"current. First few: {sorted(failed_cells)[:5]}")
 
+    summary = {
+        "run_id": args.run_id, "status": "ok" if not failed_cells else
+        ("partial" if tot["saved"] else "failed"),
+        "cells_requested": len(todo), "cells_saved": tot["saved"],
+        "cells_failed": len(failed_cells), "weather_rows": n_days,
+        "feature_rows": 0, "predictions_written": 0,
+    }
     if args.save_db:
-        status = "ok" if not failed_cells else ("partial" if tot["saved"] else "failed")
-        n_rows = finish_run(args.run_id, status)
-        print(f"DB: run {args.run_id} {status}, {n_rows:,} weather rows.")
+        n_rows = finish_run(args.run_id, summary["status"])
+        summary["weather_rows"] = n_rows
+        print(f"DB: run {args.run_id} {summary['status']}, {n_rows:,} weather rows.")
         if args.predict and n_rows:
             from backend.api.features import build_run_features
             from backend.api.fire_prediction import predict_run
-            n_feat = build_run_features(args.run_id)
-            print(f"Features: {n_feat:,} rows.")
-            predict_run(args.run_id)
-    sys.exit(1 if failed_cells else 0)
+            summary["feature_rows"] = build_run_features(args.run_id)
+            print(f"Features: {summary['feature_rows']:,} rows.")
+            summary["predictions_written"] = predict_run(args.run_id)
+    summary["seconds"] = round(time.time() - t_start, 1)
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("USAGE")[0],
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--forecast-url", default=FORECAST_URL)
+    parser.add_argument("--archive-url", default=ARCHIVE_URL,
+                        help="Archive API for the history update and the land mask")
+    parser.add_argument("--no-history-update", dest="update_history", action="store_false",
+                        help="Do not bring the archive history up to yesterday first")
+    parser.add_argument("--days", type=int, default=FORECAST_DAYS, help="Forecast days incl. today")
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Cells per request")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Parallel requests (default 4 self-hosted, 2 public)")
+    parser.add_argument("--bbox", type=float, nargs=4, metavar=("LAT_MIN", "LAT_MAX", "LON_MIN", "LON_MAX"),
+                        help="Only this part of the grid (test run)")
+    parser.add_argument("--limit", type=int, default=None, help="Only this many land cells (test run)")
+    parser.add_argument("--no-db", dest="save_db", action="store_false",
+                        help="Fetch and report only; write nothing to wildfire_db.db")
+    parser.add_argument("--no-predict", dest="predict", action="store_false",
+                        help="Store the weather but do not build features or predict")
+    a = parser.parse_args()
+    try:
+        summary = fetch_and_predict(
+            a.bbox, forecast_url=a.forecast_url, archive_url=a.archive_url,
+            update_history=a.update_history, days=a.days, batch_size=a.batch_size,
+            workers=a.workers, limit=a.limit, save_db=a.save_db, predict=a.predict)
+    except LiveFetchError as exc:
+        sys.exit(str(exc))
+    except KeyboardInterrupt:
+        print("\nStopped. The run is marked failed; the current predictions are unchanged.")
+        sys.exit(1)
+    sys.exit(1 if summary["cells_failed"] else 0)
 
 
 if __name__ == "__main__":

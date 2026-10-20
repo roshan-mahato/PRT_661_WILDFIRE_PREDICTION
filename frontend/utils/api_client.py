@@ -19,6 +19,7 @@ import streamlit as st
 from config import (
     API_BASE_URL,
     HEALTH_CACHE_TTL,
+    LIVE_FETCH_TIMEOUT,
     PREDICTIONS_CACHE_TTL,
     REFRESH_TIMEOUT,
     REQUEST_TIMEOUT,
@@ -133,8 +134,55 @@ def refresh_predictions(hours_back: int = 168) -> Tuple[pd.DataFrame, Optional[s
 
     # The stored-prediction cache is now stale -- clear it so the next read
     # picks up what this refresh just wrote.
-    fetch_stored_predictions.clear()
+    clear_prediction_cache()
     return _payload_to_frame(payload), None
+
+
+def clear_prediction_cache():
+    """Forget cached predictions, so the next read shows what was just written."""
+    fetch_stored_predictions.clear()
+    fetch_live_predictions.clear()
+
+
+def fetch_live_weather(bbox: Optional[tuple] = None) -> Tuple[Optional[dict], Optional[str]]:
+    """
+    Asks the backend to download the latest forecast for `bbox`
+    (lat_min, lat_max, lon_min, lon_max; None = all of Australia), store it
+    and predict it (POST /predictions/live).
+
+    Not cached -- like refresh_predictions() it writes to the database.
+
+    Returns:
+        (summary dict, error_message). Summary keys: run_id, status,
+        cells_requested, cells_saved, cells_failed, predictions_written, seconds.
+    """
+    params = {}
+    if bbox:
+        params = dict(zip(("lat_min", "lat_max", "lon_min", "lon_max"), bbox))
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/predictions/live", params=params, timeout=LIVE_FETCH_TIMEOUT
+        )
+        response.raise_for_status()
+        summary = response.json()
+    except requests.exceptions.ConnectionError:
+        return None, f"Cannot reach the prediction API at {API_BASE_URL}."
+    except requests.exceptions.Timeout:
+        return None, (
+            f"Live fetch timed out after {LIVE_FETCH_TIMEOUT}s. It may still finish on the "
+            "server -- switch to Saved in a minute to see the result."
+        )
+    except requests.exceptions.HTTPError as exc:
+        try:
+            detail = exc.response.json().get("detail", exc.response.text[:200])
+        except ValueError:
+            detail = exc.response.text[:200]
+        return None, f"Live fetch failed: {detail}"
+    except Exception as exc:  # noqa: BLE001 - the UI must never crash on a fetch
+        return None, f"Live fetch failed: {exc}"
+
+    clear_prediction_cache()
+    return summary, None
 
 
 @st.cache_data(ttl=HEALTH_CACHE_TTL, show_spinner=False)

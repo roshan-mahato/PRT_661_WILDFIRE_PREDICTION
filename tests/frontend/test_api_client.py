@@ -209,3 +209,68 @@ def test_check_api_health_unreachable(monkeypatch):
     healthy, message = api_client.check_api_health()
     assert not healthy
     assert "Cannot reach" in message
+
+
+# ----------------------------------------------------------------------------
+# Live fetch (POST /predictions/live)
+# ----------------------------------------------------------------------------
+LIVE_SUMMARY = {"run_id": 5, "status": "ok", "cells_requested": 4, "cells_saved": 4,
+                "cells_failed": 0, "weather_rows": 28, "feature_rows": 28,
+                "predictions_written": 28, "seconds": 2.5}
+
+
+def test_live_fetch_sends_the_region_box(monkeypatch):
+    post = FakeRequests(FakeResponse(LIVE_SUMMARY))
+    monkeypatch.setattr(api_client.requests, "post", post)
+
+    summary, error = api_client.fetch_live_weather((-39.2, -35.8, 140.9, 150.1))
+
+    assert error is None and summary["predictions_written"] == 28
+    assert post.calls[0]["url"].endswith("/predictions/live")
+    assert post.calls[0]["params"] == {"lat_min": -39.2, "lat_max": -35.8,
+                                       "lon_min": 140.9, "lon_max": 150.1}
+
+
+def test_live_fetch_whole_country_sends_no_box(monkeypatch):
+    post = FakeRequests(FakeResponse(LIVE_SUMMARY))
+    monkeypatch.setattr(api_client.requests, "post", post)
+    api_client.fetch_live_weather(None)
+    assert post.calls[0]["params"] == {}
+
+
+def test_live_fetch_clears_both_prediction_caches(monkeypatch, predictions):
+    """Regression: refresh used to clear only the stored cache, so Live mode
+    kept showing the old numbers for up to five minutes."""
+    get = _mock_get(monkeypatch, FakeResponse(_payload(predictions)))
+    api_client.fetch_stored_predictions()
+    api_client.fetch_live_predictions()
+    monkeypatch.setattr(api_client.requests, "post", FakeRequests(FakeResponse(LIVE_SUMMARY)))
+
+    api_client.fetch_live_weather(None)
+    api_client.fetch_stored_predictions()
+    api_client.fetch_live_predictions()
+
+    assert len(get.calls) == 4  # both read again after the fetch
+
+
+def test_live_fetch_reports_server_detail(monkeypatch):
+    body = {"detail": "Cannot reach the self-hosted Open-Meteo server"}
+    monkeypatch.setattr(api_client.requests, "post",
+                        FakeRequests(FakeResponse(body, status_code=503)))
+    summary, error = api_client.fetch_live_weather(None)
+    assert summary is None
+    assert "Open-Meteo" in error
+
+
+@pytest.mark.parametrize(
+    "exc, message",
+    [
+        (requests.exceptions.ConnectionError(), "Cannot reach the prediction API"),
+        (requests.exceptions.Timeout(), "timed out"),
+        (RuntimeError("boom"), "Live fetch failed: boom"),
+    ],
+)
+def test_live_fetch_errors_are_reported_not_raised(monkeypatch, exc, message):
+    monkeypatch.setattr(api_client.requests, "post", FakeRequests(exc))
+    summary, error = api_client.fetch_live_weather(None)
+    assert summary is None and message in error
